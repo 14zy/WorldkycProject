@@ -18,7 +18,7 @@ services:
       - db
     environment:
       DATABASE_URL: "postgresql://worldKYC:6y0U-jR6'y#A'>v@db:5432/worldKYC" 
-      API_TOKEN: "2064635551:AAFkeFUAizt-4XQTO-VShde47HxP7jfszXY"
+      BOT_TOKEN: "2064635551:AAFkeFUAizt-4XQTO-VShde47HxP7jfszXY"
       AUTHORIZED_TOKEN: "dpw7sDlVkjfNWVhtMVktwPd1C6ml6MbQVGJXKsdpLt8I6aFvJTxgPjcBCz5l7RxgPFTqspR8LJZnsdGf1Ylwq6P"
     ports:
       - "8080:8080" 
