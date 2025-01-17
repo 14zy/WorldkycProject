@@ -1,3 +1,7 @@
 python-dotenv~=1.0.1
 aiogram~=3.10.0
 aioschedule~=0.5.2
+sqlalchemy~=2.0.37
+psycopg2
+requests
+aiohttp

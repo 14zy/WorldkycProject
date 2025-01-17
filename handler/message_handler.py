@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.enums import ParseMode
 from utils.keyboards import web
-from data.config import url_webapp
+from config.config import url_webapp
 
 logging.basicConfig(level=logging.INFO)
 
