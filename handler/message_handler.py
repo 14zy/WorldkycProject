@@ -18,7 +18,7 @@ async def cmd_start(message: Message):
     welcome_text = (
 f'''Hello, {first_name} 👋
 Welcome to World KYC App! You can upload and verify your documents in just a few minutes.
-Type /help to get support or click Login to get started.
+Type /help to get support or click OPEN to get started.
 '''
     )
     if message.chat.type != 'private':
