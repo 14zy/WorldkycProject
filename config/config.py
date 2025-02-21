@@ -8,5 +8,5 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 AUTHORIZED_TOKEN = os.getenv("AUTHORIZED_TOKEN")
 
-url_webapp = "https://t.me/worldkycbot"
+url_webapp = "https://t.me/tonstealthid_bot"
 bot = Bot(token=BOT_TOKEN)

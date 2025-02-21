@@ -17,8 +17,8 @@ async def cmd_start(message: Message):
 
     welcome_text = (
 f'''Hello, {first_name} 👋
-Welcome to World KYC App! You can upload and verify your documents in just a few minutes.
-Type /help to get support or click OPEN to get started.
+Welcome to TON Stealth ID App! You can verify yourself and friends in your community in just a few minutes.
+Click OPEN to start the app or type /help to get support
 '''
     )
     if message.chat.type != 'private':
@@ -59,7 +59,7 @@ async def cmd_help(message: Message):
 @router.message(Command('rules'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"This group rules"
+    balance = f"Rules of the group or community"
     await message.answer(balance)
 
 @router.message(Command('report'))
@@ -80,22 +80,10 @@ async def cmd_help(message: Message):
     balance = f"Your balance: 0"
     await message.answer(balance)
 
-@router.message(Command('send'))
+@router.message(Command('score'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Send your tokens to a person. Please get some tokens on your balance to use this command."
-    await message.answer(balance)
-
-@router.message(Command('salute'))
-async def cmd_help(message: Message):
-    user_id = message.from_user.id
-    balance = f"Rewarding active users with tokens. Please get some tokens on your balance to use this command."
-    await message.answer(balance)
-
-@router.message(Command('checkme'))
-async def cmd_help(message: Message):
-    user_id = message.from_user.id
-    balance = f"Verifying your status..."
+    balance = f"Your current Trust Score is 0, please verify yourself to increase it."
     await message.answer(balance)
 
 @router.message(Command('help'))
