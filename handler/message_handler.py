@@ -89,6 +89,6 @@ async def cmd_help(message: Message):
 @router.message(Command('help'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Please use system responsibly to verify yourself or your friends with World KYC App and receive rewards. Type / to see the list of commands. More information on our website: https://worldkyc.com"
+    balance = f"Please use system responsibly to verify yourself and your friends with TON Stealth ID and receive rewards. Type / to see the list of commands. More information on our website: https://tonstealthid.com"
     await message.answer(balance)
 
