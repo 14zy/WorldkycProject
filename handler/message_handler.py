@@ -17,8 +17,9 @@ async def cmd_start(message: Message):
 
     welcome_text = (
 f'''Hello, {first_name} 👋
-Welcome to TON Stealth ID App! You can verify yourself and friends in your community in just a few minutes.
-Click OPEN to start the app or type /help to get support
+Welcome to TON Stealth ID! You can verify yourself and verify your friends with just a few minutes.
+Click OPEN to start the app or visit our Website for more information. 
+Type /help to get support
 '''
     )
     if message.chat.type != 'private':
@@ -35,19 +36,21 @@ async def cmd_help(message: Message):
 @router.message(Command('ref_stats'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Your referral earnings is 0. Please invite more people to start earning."
+    balance = f"Your referral earnings will appear here. Please invite more people to start earning."
     await message.answer(balance)
+
+# Trust Scan
 
 @router.message(Command('upload'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Upload a document or photo in next message"
+    balance = f"Upload a document for verification"
     await message.answer(balance)
 
 @router.message(Command('verify'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Verify a person or a document"
+    balance = f"Verify a person with VLive"
     await message.answer(balance)
 
 @router.message(Command('vlinks'))
@@ -59,13 +62,13 @@ async def cmd_help(message: Message):
 @router.message(Command('rules'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Rules of the group or community"
+    balance = f"Rules of the group or community will be posted here"
     await message.answer(balance)
 
 @router.message(Command('report'))
 async def cmd_help(message: Message):
     user_id = message.from_user.id
-    balance = f"Report a message or a person to administrator"
+    balance = f"Report a person to administration for a violation of the rules"
     await message.answer(balance)
 
 @router.message(Command('ban'))
