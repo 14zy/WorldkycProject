@@ -1,24 +1,33 @@
-version: '3.1'
-
 services:
   db:
-    image: postgres
-    restart: always
+    image: postgres:16
     environment:
-      POSTGRES_DB: worldKYC
-      POSTGRES_USER: worldKYC
-      POSTGRES_PASSWORD: 6y0U-jR6'y#A'>v
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${DB_DATA_DIR:-./pgdata}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -h 127.0.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     ports:
-      - "5432:5432"
+      - "${DB_BIND_HOST:-127.0.0.1}:${DB_BIND_PORT:-5432}:5432"
+    restart: unless-stopped
 
   app:
     build:
-      context: . 
+      context: .
+      dockerfile: Dockerfile
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/14zy/worldkycproject}:${APP_IMAGE_TAG:-latest}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    env_file:
+      - ${COMPOSE_ENV_FILE:-.env.compose}
     environment:
-      DATABASE_URL: "postgresql://worldKYC:6y0U-jR6'y#A'>v@db:5432/worldKYC" 
-      BOT_TOKEN: "2064635551:AAFkeFUAizt-4XQTO-VShde47HxP7jfszXY"
-      AUTHORIZED_TOKEN: "dpw7sDlVkjfNWVhtMVktwPd1C6ml6MbQVGJXKsdpLt8I6aFvJTxgPjcBCz5l7RxgPFTqspR8LJZnsdGf1Ylwq6P"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
-      - "8080:8080" 
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_BIND_PORT:-8080}:8080"
+    restart: unless-stopped

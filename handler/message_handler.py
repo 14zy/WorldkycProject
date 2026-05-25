@@ -18,7 +18,7 @@ async def cmd_start(message: Message):
     welcome_text = (
 f'''Hello, {first_name} 👋
 Welcome to TON Stealth ID! You can verify yourself and verify your friends with just a few minutes.
-Click OPEN to start the app or visit our Website for more information. 
+Click OPEN to start the app.
 Type /help to get support
 '''
     )
@@ -94,4 +94,3 @@ async def cmd_help(message: Message):
     user_id = message.from_user.id
     balance = f"Please use system responsibly to verify yourself and your friends with TON Stealth ID and receive rewards. Type / to see the list of commands. More information on our website: https://tonstealthid.com"
     await message.answer(balance)
-
