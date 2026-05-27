@@ -416,7 +416,7 @@ export function App() {
             {vlinksState === "success" && vlinks.length > 0 ? (
               <div className="vlink-list">
                 {vlinks.map((item) => (
-                  <article className="vlink-card" key={item.id} style={{ width: "100px" }}>
+                  <article className="vlink-card" key={item.id} style={{ width: "auto" }}>
                     <div className="vlink-card__header">
                       <div className="vlink-card__title">
                         <h3>{item.name}</h3>
@@ -426,10 +426,10 @@ export function App() {
                         </div>
                       </div>
                     </div>
-                    URL: <a className="vlink-url" href={item.url} target="_blank" rel="noreferrer">
+                    <a className="vlink-url" href={item.url} target="_blank" rel="noreferrer">
                       {item.url}
                     </a>
-                    E-mail: <a className="vlink-email" href={`mailto:${item.reference}@tonstealthid.com`} target="_blank" rel="noreferrer">
+                    <a className="vlink-email" href={`mailto:${item.reference}@tonstealthid.com`} target="_blank" rel="noreferrer">
                       {`${item.reference}@tonstealthid.com`}
                     </a>
                     <div className="vlink-actions">
