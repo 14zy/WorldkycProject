@@ -17,7 +17,7 @@ async def cmd_start(message: Message):
 
     welcome_text = (
 f'''Hello, {first_name} 👋
-Welcome to TON Stealth ID! Click OPEN to launch the app and select your VLinks and Anonymous E-mails. 
+Welcome to TONStealthID! Click OPEN to launch the app and select your VLinks and Anonymous E-mails. 
 You can also open the Wallet by clicking PAYID and receive your referral rewards.
 Type /help to get support
 '''
