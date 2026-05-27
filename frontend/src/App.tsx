@@ -295,7 +295,7 @@ export function App() {
         <section className="panel panel--loading">
           <div className="spinner" />
           <div>
-            <h2>Bootstrapping</h2>
+            <h2>Launching...</h2>
             <p>Validating Telegram session and loading your current link state.</p>
           </div>
         </section>
@@ -312,7 +312,7 @@ export function App() {
         <section className="panel">
           <div className="panel__header">
             <div>
-              <div className="eyebrow">WorldKyc Login</div>
+              <div className="eyebrow">TONStealthID Login</div>
               <h2>Link your account</h2>
             </div>
             <span className="status-chip">
@@ -378,17 +378,17 @@ export function App() {
                   onClick={toggleLogoutChip}
                   disabled={logoutState === "loading"}
                 >
-                  Inline enabled
+                  Connection enabled
                 </button>
               )}
             </div>
             <p>
               {loginSummary?.organizationName
-                ? `${loginSummary.organizationName} is now linked to ${formatTelegramName(telegramUser)}.`
+                ? `Account: ${loginSummary.organizationName} is now linked to Telegram: ${formatTelegramName(telegramUser)}.`
                 : `Your Telegram account is linked. Inline mode can use the same access token.`}
             </p>
             {loginSummary?.emailAddress ? (
-              <p className="meta-line">{loginSummary.emailAddress}</p>
+              <p className="meta-line">Main E-mail: {loginSummary.emailAddress}</p>
             ) : null}
             {logoutError ? <p className="feedback feedback--error">{logoutError}</p> : null}
           </section>
@@ -396,8 +396,8 @@ export function App() {
           <section className="panel">
             <div className="panel__header">
               <div>
-                <div className="eyebrow">Verified Links</div>
-                <h2>Your vlinks</h2>
+                <div className="eyebrow">VLinks</div>
+                <h2>Your Anonymous E-mails</h2>
               </div>
               {copyNotice ? <span className="status-chip">{copyNotice}</span> : null}
             </div>
@@ -427,7 +427,10 @@ export function App() {
                       </div>
                     </div>
                     <a className="vlink-url" href={item.url} target="_blank" rel="noreferrer">
-                      {item.url}
+                      URL: {item.url}
+                    </a>
+                    <a className="vlink-email" href={`mailto:${item.reference}@tonstealthid.com`} target="_blank" rel="noreferrer">
+                      E-mail: {`${item.reference}@tonstealthid.com`}
                     </a>
                     <div className="vlink-actions">
                       <a href={item.url} target="_blank" rel="noreferrer">

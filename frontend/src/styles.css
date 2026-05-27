@@ -333,6 +333,12 @@ button {
   color: #174e8d;
   word-break: break-all;
 }
+.vlink-email {
+  display: block;
+  margin: 14px 0 0;
+  color: #178d46;
+  word-break: break-all;
+}
 
 .vlink-actions {
   display: grid;
