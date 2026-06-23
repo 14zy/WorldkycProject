@@ -19,7 +19,7 @@ PYTHON_FILES := main.py \
 
 FRONTEND_DIR := frontend
 
-.PHONY: help setup run dev check clean compose-config pull up down restart ps logs build migrate revision
+.PHONY: help setup run dev check clean compose-config pull deploy up down restart ps logs build migrate revision
 
 help:
 	@printf "%-16s %s\n" "help" "Show available commands"
@@ -40,6 +40,7 @@ help:
 	@printf "%-16s %s\n" "Project Helpers" ""
 	@printf "%-16s %s\n" "compose-config" "Validate docker compose configuration"
 	@printf "%-16s %s\n" "pull" "Pull compose images"
+	@printf "%-16s %s\n" "deploy" "Run git pull, pull compose images, and start services"
 
 run:
 	@test -f "$(if $(env_file),$(env_file),$(APP_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(APP_ENV_FILE)) file not found"; exit 1; }
@@ -74,6 +75,12 @@ compose-config:
 pull:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
 	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" pull
+
+deploy:
+	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
+	git pull
+	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" pull
+	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d
 
 up:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
