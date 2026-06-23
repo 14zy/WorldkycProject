@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import Any
 
 from aiohttp import web
@@ -8,9 +9,11 @@ import data.repository.userRepository as userRepository
 from api.worldKycApi import authenticate, extract_tokens, extract_user_id
 from config.config import AUTHORIZED_TOKEN
 from services.sessionService import store_login_session
+from services.vlinkSyncService import sync_user_vlinks
 
 
 DEPRECATION_WARNING = '299 - "POST /api/v1/auth token-ingest mode is deprecated; use self-auth payloads with loginId/password instead."'
+logger = logging.getLogger(__name__)
 
 
 def _is_authorized(request) -> bool:
@@ -111,6 +114,10 @@ async def _handle_self_auth(data):
 
     upstream_user_id = extract_user_id(payload, fallback=data["loginId"])
     store_login_session(data["telegramId"], upstream_user_id, payload)
+    try:
+        await sync_user_vlinks(data["telegramId"])
+    except Exception as exc:
+        logger.warning("Initial verified link sync failed for telegramId=%s: %s", data["telegramId"], exc)
     return web.json_response(payload, status=result.get("status_code", 200))
 
 

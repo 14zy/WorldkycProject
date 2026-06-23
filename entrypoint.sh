@@ -1,3 +1,5 @@
 #!/bin/bash
-# aerich upgrade
+set -e
+
+alembic upgrade head
 exec "$@"

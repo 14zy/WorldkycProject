@@ -22,6 +22,7 @@ from services.sessionService import (
     resolve_link_state,
     store_login_session,
 )
+from services.vlinkSyncService import sync_user_vlinks
 from utils.telegram_mini_app import TelegramMiniAppAuthError, authenticate_mini_app_user
 
 
@@ -175,6 +176,10 @@ async def handle_login(request: web.Request):
 
     upstream_user_id = extract_user_id(payload, fallback=login_id)
     store_login_session(user.telegram_id, upstream_user_id, payload)
+    try:
+        await sync_user_vlinks(user.telegram_id)
+    except (AuthSessionExpiredError, SessionNotLinkedError, RuntimeError) as exc:
+        logger.warning("Initial verified link sync failed for telegramId=%s: %s", user.telegram_id, exc)
     user_settings = payload.get("userSettings") if isinstance(payload, dict) else {}
     return web.json_response(
         {
@@ -225,6 +230,11 @@ async def handle_vlinks(request: web.Request):
             result.get("details"),
         )
         return _build_upstream_error(result)
+
+    try:
+        await sync_user_vlinks(user.telegram_id, payload=result.get("payload"))
+    except (AuthSessionExpiredError, SessionNotLinkedError, RuntimeError) as exc:
+        logger.warning("Verified link cache sync failed for telegramId=%s: %s", user.telegram_id, exc)
 
     return web.json_response({"items": _normalize_vlinks(result.get("payload"))})
 

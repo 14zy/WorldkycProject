@@ -19,7 +19,7 @@ PYTHON_FILES := main.py \
 
 FRONTEND_DIR := frontend
 
-.PHONY: help setup run dev check clean compose-config pull up down restart ps logs build
+.PHONY: help setup run dev check clean compose-config pull up down restart ps logs build migrate revision
 
 help:
 	@printf "%-16s %s\n" "help" "Show available commands"
@@ -29,6 +29,8 @@ help:
 	@printf "%-16s %s\n" "check" "Build the frontend and compile Python files"
 	@printf "%-16s %s\n" "clean" "Remove Python cache directories and files"
 	@printf "%-16s %s\n" "build" "Build the local Docker image $(IMAGE)"
+	@printf "%-16s %s\n" "migrate" "Run Alembic migrations against the configured database"
+	@printf "%-16s %s\n" "revision" "Create a new Alembic migration; use msg='description'"
 	@printf "%-16s %s\n" "up" "Start compose services; use service=db and/or build=local"
 	@printf "%-16s %s\n" "down" "Stop the compose stack"
 	@printf "%-16s %s\n" "restart" "Restart compose services; use service=db"
@@ -42,6 +44,14 @@ help:
 run:
 	@test -f "$(if $(env_file),$(env_file),$(APP_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(APP_ENV_FILE)) file not found"; exit 1; }
 	python3 main.py
+
+migrate:
+	@test -f "$(if $(env_file),$(env_file),$(APP_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(APP_ENV_FILE)) file not found"; exit 1; }
+	alembic upgrade head
+
+revision:
+	@test -n "$(msg)" || { echo "Use msg='description'"; exit 1; }
+	alembic revision -m "$(msg)"
 
 setup:
 	npm install --prefix "$(FRONTEND_DIR)"

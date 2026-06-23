@@ -5,14 +5,12 @@ from aiogram import Dispatcher
 from handler import message_handler
 from handler import inline_handler
 from config.config import bot
-from config.dbConfig import SessionLocal
-from config.dbConfig import Base, engine
-from data.dbInit import ensure_user_token_columns
-from data.model.user import User
 from controller.authController import handle_request
 from controller.customerSearchHandler import handle_customer_search
 from controller.tmaController import register_tma_routes
+from services.mailService import poll_loop as mail_ingress_loop
 from services.sessionService import refresh_sessions_loop
+from services.vlinkSyncService import sync_all_linked_users_loop
 
 from aiohttp import web
 
@@ -44,9 +42,13 @@ async def start_bot():
     await dp.start_polling(bot)
 
 async def main():
-    Base.metadata.create_all(bind=engine)
-    ensure_user_token_columns()
-    await asyncio.gather(start_flask(), start_bot(), refresh_sessions_loop())
+    await asyncio.gather(
+        start_flask(),
+        start_bot(),
+        refresh_sessions_loop(),
+        sync_all_linked_users_loop(),
+        mail_ingress_loop(),
+    )
 
 if __name__ == '__main__':
     try:
