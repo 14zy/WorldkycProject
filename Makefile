@@ -2,10 +2,12 @@ SHELL := /bin/bash
 
 COMPOSE ?= docker compose
 COMPOSE_ENV_FILE ?= .env.compose
+COMPOSE_FILES ?= docker-compose.yml
 APP_ENV_FILE ?= .env
 APP_SERVICE ?= app
 DB_SERVICE ?= db
 IMAGE ?= ghcr.io/14zy/worldkycproject:latest
+COMPOSE_FILE_ARGS := $(foreach file,$(COMPOSE_FILES),-f $(file))
 
 PYTHON_FILES := main.py \
 	api/worldKycApi.py \
@@ -41,6 +43,7 @@ help:
 	@printf "%-16s %s\n" "compose-config" "Validate docker compose configuration"
 	@printf "%-16s %s\n" "pull" "Pull compose images"
 	@printf "%-16s %s\n" "deploy" "Run git pull, pull compose images, and start services"
+	@printf "%-16s %s\n" "" "Set compose_files='docker-compose.yml docker-compose.mailcow.yml' to include mailcow network"
 
 run:
 	@test -f "$(if $(env_file),$(env_file),$(APP_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(APP_ENV_FILE)) file not found"; exit 1; }
@@ -70,17 +73,17 @@ clean:
 
 compose-config:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" config
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" config
 
 pull:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" pull
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" pull
 
 deploy:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
 	git pull
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" pull
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" pull
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d
 
 up:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
@@ -88,28 +91,28 @@ up:
 		echo "Unsupported build '$(build)'. Use build=local."; \
 		exit 1; \
 	fi
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d $(if $(filter local,$(build)),--build,) $(if $(filter all,$(service)),,$(if $(service),$(service),))
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d $(if $(filter local,$(build)),--build,) $(if $(filter all,$(service)),,$(if $(service),$(service),))
 
 down:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" down
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" down
 
 restart:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
 	@if [ -n "$(service)" ] && [ "$(service)" != "all" ]; then \
-		$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" restart "$(service)"; \
+		$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" restart "$(service)"; \
 	else \
-		$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" down; \
-		$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d; \
+		$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" down; \
+		$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" up -d; \
 	fi
 
 ps:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" ps $(if $(filter all,$(service)),,$(if $(service),$(service),))
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" ps $(if $(filter all,$(service)),,$(if $(service),$(service),))
 
 logs:
 	@test -f "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" || { echo "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE)) file not found"; exit 1; }
-	$(COMPOSE) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" logs -f $(if $(filter all,$(service)),,$(if $(service),$(service),$(APP_SERVICE)))
+	$(COMPOSE) $(COMPOSE_FILE_ARGS) --env-file "$(if $(env_file),$(env_file),$(COMPOSE_ENV_FILE))" logs -f $(if $(filter all,$(service)),,$(if $(service),$(service),$(APP_SERVICE)))
 
 build:
 	docker build -t "$(IMAGE)" .

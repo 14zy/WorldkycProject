@@ -1,0 +1,10 @@
+services:
+  app:
+    networks:
+      - default
+      - mailcow_net
+
+networks:
+  mailcow_net:
+    external: true
+    name: ${MAILCOW_NETWORK_NAME:-mailcowdockerized_mailcow-network}

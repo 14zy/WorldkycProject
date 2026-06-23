@@ -28,14 +28,6 @@ services:
       - ${COMPOSE_ENV_FILE:-.env.compose}
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    networks:
-      - default
-      - mailcow_net
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_BIND_PORT:-8080}:8080"
     restart: unless-stopped
-
-networks:
-  mailcow_net:
-    external: true
-    name: ${MAILCOW_NETWORK_NAME:-mailcowdockerized_mailcow-network}
