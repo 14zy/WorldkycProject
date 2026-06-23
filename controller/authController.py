@@ -16,6 +16,14 @@ DEPRECATION_WARNING = '299 - "POST /api/v1/auth token-ingest mode is deprecated;
 logger = logging.getLogger(__name__)
 
 
+def _mask_login_id(login_id: str | None) -> str:
+    if not login_id:
+        return "<empty>"
+    if len(login_id) <= 4:
+        return "*" * len(login_id)
+    return f"{login_id[:2]}***{login_id[-2:]}"
+
+
 def _is_authorized(request) -> bool:
     auth_header = request.headers.get("Authorization")
     return bool(auth_header and auth_header == f"Bearer {AUTHORIZED_TOKEN}")
@@ -86,24 +94,51 @@ def _build_error_response(result):
 
 
 async def _handle_self_auth(data):
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: authenticate(
-            data["loginId"],
-            data["password"],
-            caller_id=data.get("callerId"),
-            include_user_settings_in_response=data.get("includeUserSettingsInResponse", True),
-            include_access_rights_with_user_settings=data.get("includeAccessRightsWithUserSettings", False),
-        ),
+    logger.info(
+        "API self-auth attempt telegramId=%s loginId=%s",
+        data["telegramId"],
+        _mask_login_id(data["loginId"]),
     )
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: authenticate(
+                data["loginId"],
+                data["password"],
+                caller_id=data.get("callerId"),
+                include_user_settings_in_response=data.get("includeUserSettingsInResponse", True),
+                include_access_rights_with_user_settings=data.get("includeAccessRightsWithUserSettings", False),
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "API self-auth crashed before upstream response telegramId=%s loginId=%s",
+            data["telegramId"],
+            _mask_login_id(data["loginId"]),
+        )
+        return web.json_response({"error": "Internal server error"}, status=500)
 
     if not result.get("ok"):
+        logger.warning(
+            "API self-auth upstream rejection telegramId=%s loginId=%s status=%s message=%s details=%s",
+            data["telegramId"],
+            _mask_login_id(data["loginId"]),
+            result.get("status_code"),
+            result.get("message"),
+            result.get("details"),
+        )
         return _build_error_response(result)
 
     payload = result.get("payload") or {}
     access_token, refresh_token = extract_tokens(payload)
     if not access_token or not refresh_token:
+        logger.error(
+            "API self-auth succeeded without expected tokens telegramId=%s loginId=%s payload=%s",
+            data["telegramId"],
+            _mask_login_id(data["loginId"]),
+            payload,
+        )
         return web.json_response(
             {
                 "error": "WorldKyc Authenticate response did not include expected tokens",
@@ -114,6 +149,12 @@ async def _handle_self_auth(data):
 
     upstream_user_id = extract_user_id(payload, fallback=data["loginId"])
     store_login_session(data["telegramId"], upstream_user_id, payload)
+    logger.info(
+        "API self-auth linked telegramId=%s loginId=%s userId=%s",
+        data["telegramId"],
+        _mask_login_id(data["loginId"]),
+        upstream_user_id,
+    )
     try:
         await sync_user_vlinks(data["telegramId"])
     except Exception as exc:

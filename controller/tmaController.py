@@ -68,6 +68,14 @@ def _build_upstream_error(result):
     return web.json_response(payload, status=result.get("status_code", 502))
 
 
+def _mask_login_id(login_id: str | None) -> str:
+    if not login_id:
+        return "<empty>"
+    if len(login_id) <= 4:
+        return "*" * len(login_id)
+    return f"{login_id[:2]}***{login_id[-2:]}"
+
+
 async def _resolve_tma_user_from_json(request: web.Request):
     try:
         data = await request.json()
@@ -153,21 +161,50 @@ async def handle_login(request: web.Request):
     login_id = data.get("loginId")
     password = data.get("password")
     if not isinstance(login_id, str) or not login_id:
+        logger.warning("TMA login rejected for telegramId=%s: missing loginId", user.telegram_id)
         return _json_error("loginId is required", 400)
     if not isinstance(password, str) or not password:
+        logger.warning(
+            "TMA login rejected for telegramId=%s loginId=%s: missing password",
+            user.telegram_id,
+            _mask_login_id(login_id),
+        )
         return _json_error("password is required", 400)
 
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: authenticate(login_id, password),
-    )
+    logger.info("TMA login attempt telegramId=%s loginId=%s", user.telegram_id, _mask_login_id(login_id))
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: authenticate(login_id, password),
+        )
+    except Exception:
+        logger.exception(
+            "TMA login crashed before upstream response telegramId=%s loginId=%s",
+            user.telegram_id,
+            _mask_login_id(login_id),
+        )
+        return _json_error("Login failed", 500, details="Internal server error")
     if not result.get("ok"):
+        logger.warning(
+            "TMA login upstream rejection telegramId=%s loginId=%s status=%s message=%s details=%s",
+            user.telegram_id,
+            _mask_login_id(login_id),
+            result.get("status_code"),
+            result.get("message"),
+            result.get("details"),
+        )
         return _build_upstream_error(result)
 
     payload = result.get("payload") or {}
     access_token, refresh_token = extract_tokens(payload)
     if not access_token or not refresh_token:
+        logger.error(
+            "TMA login succeeded without expected tokens telegramId=%s loginId=%s payload=%s",
+            user.telegram_id,
+            _mask_login_id(login_id),
+            payload,
+        )
         return _json_error(
             "WorldKyc Authenticate response did not include expected tokens",
             502,
@@ -176,6 +213,12 @@ async def handle_login(request: web.Request):
 
     upstream_user_id = extract_user_id(payload, fallback=login_id)
     store_login_session(user.telegram_id, upstream_user_id, payload)
+    logger.info(
+        "TMA login linked telegramId=%s loginId=%s userId=%s",
+        user.telegram_id,
+        _mask_login_id(login_id),
+        upstream_user_id,
+    )
     try:
         await sync_user_vlinks(user.telegram_id)
     except (AuthSessionExpiredError, SessionNotLinkedError, RuntimeError) as exc:
