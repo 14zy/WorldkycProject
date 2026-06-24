@@ -81,6 +81,15 @@ def _extract_aliases(message: Message) -> list[str]:
     return aliases
 
 
+def _select_effective_aliases(aliases: list[str]) -> list[str]:
+    target_aliases = [alias for alias in aliases if alias != SYSTEM_MAILBOX_ALIAS]
+    if target_aliases:
+        return target_aliases
+    if SYSTEM_MAILBOX_ALIAS and SYSTEM_MAILBOX_ALIAS in aliases:
+        return [SYSTEM_MAILBOX_ALIAS]
+    return []
+
+
 def _extract_body(message: Message) -> str:
     if message.is_multipart():
         plain_parts: list[str] = []
@@ -158,18 +167,18 @@ async def _process_message(uid: str, message: Message):
 
     message_id = message.get("Message-ID")
     aliases = _extract_aliases(message)
-    if not aliases:
+    effective_aliases = _select_effective_aliases(aliases)
+    if not effective_aliases:
         logger.warning("Skipping IMAP message uid=%s message_id=%s without recipient alias", uid, message_id)
         return
 
     delivered_any = False
     delivered_to: set[int] = set()
     unmatched_aliases: list[str] = []
-    for alias in aliases:
+    for alias in effective_aliases:
         verified_link = verifiedLinkRepository.find_by_reference(alias)
         if not verified_link:
-            if alias != SYSTEM_MAILBOX_ALIAS:
-                unmatched_aliases.append(alias)
+            unmatched_aliases.append(alias)
             continue
         if verified_link.telegramId in delivered_to:
             continue

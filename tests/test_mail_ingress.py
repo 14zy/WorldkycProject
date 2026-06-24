@@ -1,7 +1,15 @@
+from types import SimpleNamespace
 import unittest
 from email.message import EmailMessage
+from unittest.mock import AsyncMock, Mock, call, patch
 
-from services.mailService import SYSTEM_MAILBOX_ALIAS, _build_telegram_message, _extract_aliases
+from services.mailService import (
+    SYSTEM_MAILBOX_ALIAS,
+    _build_telegram_message,
+    _extract_aliases,
+    _process_message,
+    _select_effective_aliases,
+)
 
 
 class MailIngressTests(unittest.TestCase):
@@ -29,6 +37,15 @@ class MailIngressTests(unittest.TestCase):
 
         self.assertEqual(_extract_aliases(message), ["vl10157", "vl10158", "vl10488"])
 
+    def test_select_effective_aliases_prefers_target_alias_over_system_mailbox(self):
+        self.assertEqual(_select_effective_aliases(["vl10776", "vl10488"]), ["vl10776"])
+
+    def test_select_effective_aliases_falls_back_to_system_mailbox(self):
+        self.assertEqual(_select_effective_aliases(["vl10488"]), ["vl10488"])
+
+    def test_select_effective_aliases_keeps_multiple_target_aliases(self):
+        self.assertEqual(_select_effective_aliases(["vl10776", "vl10777", "vl10488"]), ["vl10776", "vl10777"])
+
     def test_build_telegram_message_uses_plain_text_body(self):
         message = EmailMessage()
         message["Subject"] = "Status"
@@ -51,6 +68,68 @@ class MailIngressTests(unittest.TestCase):
 
         rendered = _build_telegram_message(message, "vl10157")
         self.assertIn("<b>Subject:</b> Аваываывоатцула", rendered)
+
+
+class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_process_message_skips_system_mailbox_when_target_alias_exists(self):
+        message = EmailMessage()
+        message["Message-ID"] = "<msg-1@example.com>"
+        message["To"] = "VL10776@tonstealthid.com"
+        message["Delivered-To"] = "VL10488@tonstealthid.com"
+        message.set_content("Body")
+
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", side_effect=[
+                SimpleNamespace(telegramId=10776),
+            ]) as find_by_reference,
+            patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+        ):
+            await _process_message("123", message)
+
+        find_by_reference.assert_called_once_with("vl10776")
+        deliver_to_telegram.assert_awaited_once()
+        self.assertEqual(deliver_to_telegram.await_args.args[0], 10776)
+        mark_processed.assert_called_once_with(
+            "INBOX",
+            "123",
+            message_id="<msg-1@example.com>",
+            recipient_alias="vl10776",
+            status="delivered",
+        )
+
+    async def test_process_message_delivers_to_multiple_target_aliases_without_system_mailbox(self):
+        message = EmailMessage()
+        message["Message-ID"] = "<msg-2@example.com>"
+        message["To"] = "VL10776@tonstealthid.com"
+        message["X-Original-To"] = "VL10777@tonstealthid.com"
+        message["Delivered-To"] = "VL10488@tonstealthid.com"
+        message.set_content("Body")
+
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", side_effect=[
+                SimpleNamespace(telegramId=10776),
+                SimpleNamespace(telegramId=10777),
+            ]) as find_by_reference,
+            patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+        ):
+            await _process_message("124", message)
+
+        self.assertEqual(
+            find_by_reference.call_args_list,
+            [call("vl10776"), call("vl10777")],
+        )
+        self.assertEqual(
+            [args.args[0] for args in deliver_to_telegram.await_args_list],
+            [10776, 10777],
+        )
+        self.assertEqual(
+            [kwargs["recipient_alias"] for _, kwargs in mark_processed.call_args_list],
+            ["vl10776", "vl10777"],
+        )
 
 
 if __name__ == "__main__":
