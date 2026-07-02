@@ -151,6 +151,7 @@ async def handle_bootstrap(request: web.Request):
             "user": {
                 "telegramId": user.telegram_id,
                 "userId": linked_user.userId if linked_user else None,
+                "emailAddress": linked_user.emailAddress if linked_user else None,
             },
         }
     )

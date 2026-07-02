@@ -8,6 +8,7 @@ from typing import Any
 
 import data.repository.userRepository as userRepository
 from api.worldKycApi import (
+    extract_user_email,
     extract_token_lifetime_fields,
     extract_tokens,
     refresh_authenticate,
@@ -123,11 +124,13 @@ def _is_refresh_failure(status_code: int | None, message: str | None) -> bool:
 
 def _persist_tokens(telegram_id: int, user_id: str, access_token: str, refresh_token: str, payload: dict[str, Any]):
     metadata = build_token_metadata(payload)
+    email_address = extract_user_email(payload)
     userRepository.saveUser(
         telegram_id,
         user_id,
         access_token,
         refresh_token,
+        email_address,
         metadata["accessTokenExpiresAt"],
         metadata["refreshTokenExpiresAt"],
         metadata["lastTokenRefreshAt"],
@@ -179,10 +182,12 @@ async def _refresh_user_session(telegram_id: int, force: bool = False):
             refresh_token = user.refreshToken
 
         metadata = build_token_metadata(payload)
+        email_address = extract_user_email(payload)
         userRepository.updateUserTokens(
             telegram_id,
             access_token,
             refresh_token,
+            email_address,
             metadata["accessTokenExpiresAt"],
             metadata["refreshTokenExpiresAt"],
             metadata["lastTokenRefreshAt"],

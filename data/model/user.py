@@ -7,6 +7,7 @@ class User(Base):
 
     telegramId = Column(BigInteger, primary_key=True, index=True)
     userId = Column(String, index=True)
+    emailAddress = Column(String, nullable=True, index=True)
     accessToken = Column(String, index=True)
     refreshToken = Column(String, index=True)
     accessTokenExpiresAt = Column(DateTime(timezone=True), nullable=True)

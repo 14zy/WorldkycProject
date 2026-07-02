@@ -1,7 +1,15 @@
 import os
 
-from aiogram import Bot
-from dotenv import load_dotenv
+try:
+    from aiogram import Bot
+except ImportError:  # pragma: no cover - test environments may not have runtime deps installed
+    Bot = None
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - test environments may not have runtime deps installed
+    def load_dotenv():
+        return False
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -42,6 +50,10 @@ IMAP_PASSWORD = os.getenv("IMAP_PASSWORD")
 IMAP_MAILBOX = os.getenv("IMAP_MAILBOX", "INBOX")
 IMAP_USE_SSL = _get_bool_env("IMAP_USE_SSL", True)
 IMAP_POLL_INTERVAL_SECONDS = _get_int_env("IMAP_POLL_INTERVAL_SECONDS", 60)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+RESEND_BASE_URL = os.getenv("RESEND_BASE_URL", "https://api.resend.com").rstrip("/")
+RESEND_TIMEOUT_SECONDS = _get_int_env("RESEND_TIMEOUT_SECONDS", 15)
+MAIL_FROM_DOMAIN = os.getenv("MAIL_FROM_DOMAIN", "tonstealthid.com").strip()
 
 url_webapp = "https://t.me/tonstealthid_bot"
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN) if Bot and BOT_TOKEN else None

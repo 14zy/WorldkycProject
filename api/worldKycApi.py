@@ -262,3 +262,28 @@ def extract_user_id(payload, fallback=None):
             return current
 
     return fallback
+
+
+def extract_user_email(payload):
+    if not isinstance(payload, dict):
+        return None
+
+    candidate_paths = (
+        ("userSettings", "emailAddress"),
+        ("userSettings", "user", "emailAddress"),
+        ("userSettings", "currentUser", "emailAddress"),
+    )
+
+    for path in candidate_paths:
+        current = payload
+        for key in path:
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(key)
+        if isinstance(current, str):
+            normalized = current.strip()
+            if normalized:
+                return normalized
+
+    return None

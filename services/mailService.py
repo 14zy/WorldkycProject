@@ -8,6 +8,7 @@ from email.message import Message
 from email.utils import getaddresses
 
 import data.repository.processedEmailRepository as processedEmailRepository
+import data.repository.userRepository as userRepository
 import data.repository.verifiedLinkRepository as verifiedLinkRepository
 from config.config import (
     IMAP_HOST,
@@ -19,12 +20,21 @@ from config.config import (
     IMAP_USERNAME,
     bot,
 )
+from services.outboundMailService import send_forward_email
 from utils.mailSanitizer import chunk_telegram_text, html_to_text, sanitize_mail_text
 
 
 logger = logging.getLogger(__name__)
 RECIPIENT_HEADERS = ("To", "X-Original-To", "Envelope-To", "Delivered-To")
 SYSTEM_MAILBOX_ALIAS = IMAP_USERNAME.partition("@")[0].strip().casefold() if IMAP_USERNAME else ""
+STATUS_DELIVERED = "delivered"
+STATUS_TELEGRAM_ONLY = "telegram_only"
+STATUS_PARTIAL = "partial"
+STATUS_PRIORITY = {
+    STATUS_DELIVERED: 0,
+    STATUS_TELEGRAM_ONLY: 1,
+    STATUS_PARTIAL: 2,
+}
 
 
 def _imap_enabled() -> bool:
@@ -148,17 +158,51 @@ def _decode_header_value(value: str | None) -> str:
     return "".join(decoded_parts)
 
 
+def _build_plain_forward_content(message: Message, recipient_alias: str) -> str:
+    display_alias = recipient_alias.upper()
+    subject = sanitize_mail_text(_decode_header_value(message.get("Subject"))) or "(no subject)"
+    sender = sanitize_mail_text(_decode_header_value(message.get("From"))) or "(unknown sender)"
+    body = sanitize_mail_text(_extract_body(message)) or "(empty message)"
+    return f"To: {display_alias}\nFrom: {sender}\nSubject: {subject}\n\n{body}"
+
+
 def _build_telegram_message(message: Message, recipient_alias: str) -> str:
-    display_alias = html.escape(recipient_alias.upper())
-    subject = html.escape(sanitize_mail_text(_decode_header_value(message.get("Subject"))) or "(no subject)")
-    sender = html.escape(sanitize_mail_text(_decode_header_value(message.get("From"))) or "(unknown sender)")
-    body = html.escape(sanitize_mail_text(_extract_body(message)) or "(empty message)")
-    return f"<b>To:</b> {display_alias}\n<b>From:</b> {sender}\n<b>Subject:</b> {subject}\n\n{body}"
+    plain_text = _build_plain_forward_content(message, recipient_alias)
+    escaped = html.escape(plain_text)
+    escaped = escaped.replace("To: ", "<b>To:</b> ", 1)
+    escaped = escaped.replace("\nFrom: ", "\n<b>From:</b> ", 1)
+    escaped = escaped.replace("\nSubject: ", "\n<b>Subject:</b> ", 1)
+    return escaped
 
 
 async def _deliver_to_telegram(telegram_id: int, text: str):
     for chunk in chunk_telegram_text(text):
         await bot.send_message(chat_id=telegram_id, text=chunk, parse_mode="HTML")
+
+
+def _deliver_to_user_email(message: Message, recipient_alias: str, recipient_email: str):
+    subject = sanitize_mail_text(_decode_header_value(message.get("Subject"))) or "(no subject)"
+    sender_header = sanitize_mail_text(_decode_header_value(message.get("From"))) or ""
+    body = _build_plain_forward_content(message, recipient_alias)
+    send_forward_email(
+        recipient_alias=recipient_alias,
+        recipient_email=recipient_email,
+        sender_header=sender_header,
+        subject=subject,
+        body=body,
+    )
+
+
+def _merge_status(current_status: str | None, next_status: str) -> str:
+    if current_status is None:
+        return next_status
+    if STATUS_PRIORITY[next_status] > STATUS_PRIORITY[current_status]:
+        return next_status
+    if current_status == STATUS_TELEGRAM_ONLY and next_status == STATUS_DELIVERED:
+        return STATUS_PARTIAL
+    if current_status == STATUS_DELIVERED and next_status == STATUS_TELEGRAM_ONLY:
+        return STATUS_PARTIAL
+    return current_status
 
 
 async def _process_message(uid: str, message: Message):
@@ -173,26 +217,59 @@ async def _process_message(uid: str, message: Message):
         return
 
     delivered_any = False
-    delivered_to: set[int] = set()
+    target_deliveries: dict[int, str] = {}
     unmatched_aliases: list[str] = []
+    aggregate_status: str | None = None
+    aggregate_alias: str | None = None
+    aggregate_errors: list[str] = []
     for alias in effective_aliases:
         verified_link = verifiedLinkRepository.find_by_reference(alias)
         if not verified_link:
             unmatched_aliases.append(alias)
             continue
-        if verified_link.telegramId in delivered_to:
-            continue
+        target_deliveries.setdefault(verified_link.telegramId, alias)
 
+    for telegram_id, alias in target_deliveries.items():
         text = _build_telegram_message(message, alias)
-        await _deliver_to_telegram(verified_link.telegramId, text)
-        delivered_to.add(verified_link.telegramId)
+        await _deliver_to_telegram(telegram_id, text)
         delivered_any = True
+        if aggregate_alias is None:
+            aggregate_alias = alias
+
+        status = STATUS_TELEGRAM_ONLY
+        error = None
+        user = userRepository.findUserByTelegramId(telegram_id)
+        if user and getattr(user, "emailAddress", None):
+            try:
+                _deliver_to_user_email(message, alias, user.emailAddress)
+                status = STATUS_DELIVERED
+            except Exception as exc:
+                status = STATUS_PARTIAL
+                error = str(exc)
+                logger.warning(
+                    "Outbound alias forwarding failed uid=%s message_id=%s alias=%s telegramId=%s email=%s: %s",
+                    uid,
+                    message_id,
+                    alias,
+                    telegram_id,
+                    user.emailAddress,
+                    exc,
+                )
+        else:
+            error = "User email address not available"
+
+        aggregate_status = _merge_status(aggregate_status, status)
+        if error and error not in aggregate_errors:
+            aggregate_errors.append(error)
+
+    if delivered_any:
         processedEmailRepository.mark_processed(
             IMAP_MAILBOX,
             uid,
             message_id=message_id,
-            recipient_alias=alias,
-            status="delivered",
+            recipient_alias=aggregate_alias,
+            status=aggregate_status or STATUS_TELEGRAM_ONLY,
+            error="; ".join(aggregate_errors) if aggregate_errors else None,
         )
 
     if unmatched_aliases and delivered_any:

@@ -30,6 +30,7 @@ def saveUser(
     user_id: str,
     accessToken: str,
     refreshToken: str,
+    emailAddress: str | None = None,
     accessTokenExpiresAt: datetime | None = None,
     refreshTokenExpiresAt: datetime | None = None,
     lastTokenRefreshAt: datetime | None = None,
@@ -41,6 +42,7 @@ def saveUser(
             user = User(
                 telegramId=telegramId,
                 userId=user_id,
+                emailAddress=emailAddress,
                 accessToken=accessToken,
                 refreshToken=refreshToken,
                 accessTokenExpiresAt=accessTokenExpiresAt,
@@ -51,6 +53,8 @@ def saveUser(
         else:
             user.telegramId = telegramId
             user.userId = user_id
+            if emailAddress is not None:
+                user.emailAddress = emailAddress
             user.accessToken = accessToken
             user.refreshToken = refreshToken
             user.accessTokenExpiresAt = accessTokenExpiresAt
@@ -68,6 +72,7 @@ def updateUserTokens(
     telegramId: int,
     accessToken: str,
     refreshToken: str,
+    emailAddress: str | None = None,
     accessTokenExpiresAt: datetime | None = None,
     refreshTokenExpiresAt: datetime | None = None,
     lastTokenRefreshAt: datetime | None = None,
@@ -80,6 +85,8 @@ def updateUserTokens(
 
         user.accessToken = accessToken
         user.refreshToken = refreshToken
+        if emailAddress is not None:
+            user.emailAddress = emailAddress
         user.accessTokenExpiresAt = accessTokenExpiresAt
         user.refreshTokenExpiresAt = refreshTokenExpiresAt
         user.lastTokenRefreshAt = lastTokenRefreshAt
