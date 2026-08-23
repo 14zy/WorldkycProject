@@ -105,6 +105,7 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
             patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
             patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_to_user_email,
             patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
         ):
             await _process_message("123", message)
 
@@ -112,6 +113,9 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
         deliver_to_telegram.assert_awaited_once()
         deliver_to_user_email.assert_called_once_with(message, "vl10776", "user@example.com")
         self.assertEqual(deliver_to_telegram.await_args.args[0], 10776)
+        upsert_vmail.assert_called_once()
+        self.assertEqual(upsert_vmail.call_args.kwargs["recipient_alias"], "vl10776")
+        self.assertEqual(upsert_vmail.call_args.kwargs["delivery_status"], STATUS_DELIVERED)
         mark_processed.assert_called_once_with(
             "INBOX",
             "123",
@@ -134,11 +138,16 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
             patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
             patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_to_user_email,
             patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
         ):
             await _process_message("123b", message)
 
         deliver_to_telegram.assert_awaited_once()
         deliver_to_user_email.assert_not_called()
+        upsert_vmail.assert_called_once()
+        self.assertEqual(upsert_vmail.call_args.kwargs["recipient_alias"], "vl10776")
+        self.assertEqual(upsert_vmail.call_args.kwargs["delivery_status"], STATUS_TELEGRAM_ONLY)
+        self.assertEqual(upsert_vmail.call_args.kwargs["error"], "User email address not available")
         mark_processed.assert_called_once_with(
             "INBOX",
             "123b",
@@ -166,6 +175,7 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
             patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
             patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_to_user_email,
             patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
         ):
             await _process_message("124", message)
 
@@ -175,6 +185,10 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([args.args[0] for args in deliver_to_telegram.await_args_list], [10776])
         deliver_to_user_email.assert_called_once_with(message, "vl10776", "user@example.com")
+        self.assertEqual(
+            [call_args.kwargs["recipient_alias"] for call_args in upsert_vmail.call_args_list],
+            ["vl10776", "vl10777"],
+        )
         mark_processed.assert_called_once_with(
             "INBOX",
             "124",
@@ -197,10 +211,14 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
             patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
             patch("services.mailService._deliver_to_user_email", side_effect=RuntimeError("smtp down")),
             patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
         ):
             await _process_message("125", message)
 
         deliver_to_telegram.assert_awaited_once()
+        upsert_vmail.assert_called_once()
+        self.assertEqual(upsert_vmail.call_args.kwargs["delivery_status"], STATUS_PARTIAL)
+        self.assertEqual(upsert_vmail.call_args.kwargs["error"], "smtp down")
         mark_processed.assert_called_once_with(
             "INBOX",
             "125",

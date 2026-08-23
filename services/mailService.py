@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import email
 import html
@@ -5,11 +7,12 @@ import imaplib
 import logging
 from email.header import decode_header
 from email.message import Message
-from email.utils import getaddresses
+from email.utils import getaddresses, parsedate_to_datetime
 
 import data.repository.processedEmailRepository as processedEmailRepository
 import data.repository.userRepository as userRepository
 import data.repository.verifiedLinkRepository as verifiedLinkRepository
+import data.repository.vmailMessageRepository as vmailMessageRepository
 from config.config import (
     IMAP_HOST,
     IMAP_MAILBOX,
@@ -166,6 +169,34 @@ def _build_plain_forward_content(message: Message, recipient_alias: str) -> str:
     return f"To: {display_alias}\nFrom: {sender}\nSubject: {subject}\n\n{body}"
 
 
+def _parse_received_at(message: Message):
+    raw_date = message.get("Date")
+    if not raw_date:
+        return None
+    try:
+        return parsedate_to_datetime(raw_date)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
+def _extract_reply_to(message: Message, from_header: str) -> str | None:
+    reply_to = sanitize_mail_text(_decode_header_value(message.get("Reply-To")))
+    return reply_to or from_header or None
+
+
+def _extract_inbox_content(message: Message):
+    from_header = sanitize_mail_text(_decode_header_value(message.get("From"))) or "(unknown sender)"
+    subject = sanitize_mail_text(_decode_header_value(message.get("Subject"))) or "(no subject)"
+    body_text = sanitize_mail_text(_extract_body(message)) or "(empty message)"
+    return {
+        "from_header": from_header,
+        "reply_to": _extract_reply_to(message, from_header),
+        "subject": subject,
+        "body_text": body_text,
+        "received_at": _parse_received_at(message),
+    }
+
+
 def _build_telegram_message(message: Message, recipient_alias: str) -> str:
     plain_text = _build_plain_forward_content(message, recipient_alias)
     escaped = html.escape(plain_text)
@@ -217,7 +248,8 @@ async def _process_message(uid: str, message: Message):
         return
 
     delivered_any = False
-    target_deliveries: dict[int, str] = {}
+    resolved_deliveries = []
+    target_deliveries: dict[int, tuple[str, object]] = {}
     unmatched_aliases: list[str] = []
     aggregate_status: str | None = None
     aggregate_alias: str | None = None
@@ -227,9 +259,11 @@ async def _process_message(uid: str, message: Message):
         if not verified_link:
             unmatched_aliases.append(alias)
             continue
-        target_deliveries.setdefault(verified_link.telegramId, alias)
+        resolved_deliveries.append((alias, verified_link))
+        target_deliveries.setdefault(verified_link.telegramId, (alias, verified_link))
 
-    for telegram_id, alias in target_deliveries.items():
+    delivery_results: dict[int, tuple[str, str | None]] = {}
+    for telegram_id, (alias, _verified_link) in target_deliveries.items():
         text = _build_telegram_message(message, alias)
         await _deliver_to_telegram(telegram_id, text)
         delivered_any = True
@@ -258,9 +292,30 @@ async def _process_message(uid: str, message: Message):
         else:
             error = "User email address not available"
 
+        delivery_results[telegram_id] = (status, error)
         aggregate_status = _merge_status(aggregate_status, status)
         if error and error not in aggregate_errors:
             aggregate_errors.append(error)
+
+    if delivered_any:
+        inbox_content = _extract_inbox_content(message)
+        for alias, verified_link in resolved_deliveries:
+            status, error = delivery_results.get(verified_link.telegramId, (STATUS_TELEGRAM_ONLY, None))
+            vmailMessageRepository.upsert_from_processed_message(
+                mailbox=IMAP_MAILBOX,
+                imap_uid=uid,
+                message_id=message_id,
+                recipient_alias=alias,
+                telegram_id=verified_link.telegramId,
+                user_id=getattr(verified_link, "userId", None),
+                from_header=inbox_content["from_header"],
+                reply_to=inbox_content["reply_to"],
+                subject=inbox_content["subject"],
+                body_text=inbox_content["body_text"],
+                delivery_status=status,
+                error=error,
+                received_at=inbox_content["received_at"],
+            )
 
     if delivered_any:
         processedEmailRepository.mark_processed(
