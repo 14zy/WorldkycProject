@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
 
 import data.repository.userRepository as userRepository
+import data.repository.verifiedLinkRepository as verifiedLinkRepository
+import data.repository.vmailMessageRepository as vmailMessageRepository
 from api.worldKycApi import (
     authenticate,
     extract_tokens,
@@ -37,6 +42,8 @@ def register_tma_routes(app: web.Application):
     app.router.add_post("/api/tma/login", handle_login)
     app.router.add_post("/api/tma/logout", handle_logout)
     app.router.add_get("/api/tma/vlinks", handle_vlinks)
+    app.router.add_get("/api/tma/vmail/messages", handle_vmail_messages)
+    app.router.add_post("/api/tma/vmail/messages/{id}/read", handle_vmail_message_read)
     app.router.add_get("/tma/assets/{tail:.*}", handle_tma_asset)
     app.router.add_get("/tma", handle_tma_index)
     app.router.add_get("/tma/{tail:.*}", handle_tma_index)
@@ -74,6 +81,94 @@ def _mask_login_id(login_id: str | None) -> str:
     if len(login_id) <= 4:
         return "*" * len(login_id)
     return f"{login_id[:2]}***{login_id[-2:]}"
+
+
+def _split_references(raw_references: str | None) -> list[str]:
+    if not raw_references:
+        return []
+    return [reference.strip().casefold() for reference in raw_references.split(",") if reference.strip()]
+
+
+def _parse_int_query(request: web.Request, name: str, default: int, minimum: int, maximum: int) -> int:
+    raw_value = request.query.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(
+            text=web.json_response({"error": f"{name} must be an integer"}).text,
+            content_type="application/json",
+        ) from exc
+    return max(minimum, min(value, maximum))
+
+
+def _parse_bool_query(request: web.Request, name: str, default: bool = False) -> bool:
+    raw_value = request.query.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _isoformat_utc(value):
+    if not value:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _received_label(value) -> str:
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - value.astimezone(timezone.utc)
+    seconds = max(0, int(delta.total_seconds()))
+    if seconds < 60:
+        return "Just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _body_preview(body_text: str, max_length: int = 480) -> str:
+    preview = " ".join((body_text or "").split())
+    if len(preview) <= max_length:
+        return preview
+    return preview[: max_length - 1].rstrip() + "..."
+
+
+def _serialize_vmail_message(message):
+    received_at = getattr(message, "receivedAt", None) or getattr(message, "processedAt", None)
+    return {
+        "id": message.id,
+        "reference": message.recipient_alias,
+        "from": message.from_header,
+        "replyTo": message.reply_to,
+        "subject": message.subject,
+        "receivedAt": _isoformat_utc(received_at),
+        "receivedLabel": _received_label(received_at),
+        "deliveryStatus": message.delivery_status,
+        "isUnread": not message.is_read,
+        "snippet": message.snippet,
+        "bodyPreview": _body_preview(message.body_text),
+        "senderTrust": message.sender_trust or vmailMessageRepository.DEFAULT_SENDER_TRUST,
+        "notaryStatus": message.notary_status or vmailMessageRepository.DEFAULT_NOTARY_STATUS,
+        "identityStatus": message.identity_status or vmailMessageRepository.DEFAULT_IDENTITY_STATUS,
+        "governanceStatus": message.governance_status or vmailMessageRepository.DEFAULT_GOVERNANCE_STATUS,
+    }
+
+
+def _is_linked_tma_user(linked_user) -> bool:
+    return bool(linked_user and linked_user.userId and linked_user.accessToken and linked_user.refreshToken)
 
 
 async def _resolve_tma_user_from_json(request: web.Request):
@@ -281,6 +376,63 @@ async def handle_vlinks(request: web.Request):
         logger.warning("Verified link cache sync failed for telegramId=%s: %s", user.telegram_id, exc)
 
     return web.json_response({"items": _normalize_vlinks(result.get("payload"))})
+
+
+async def handle_vmail_messages(request: web.Request):
+    user = _resolve_tma_user_from_header(request)
+    linked_user = userRepository.findUserByTelegramId(user.telegram_id)
+    if not _is_linked_tma_user(linked_user):
+        return _json_error("User is not linked", 404)
+
+    requested_references = _split_references(request.query.get("references"))
+    if requested_references:
+        links = verifiedLinkRepository.list_for_user_references(
+            user.telegram_id,
+            requested_references,
+            linked_user.userId,
+        )
+    else:
+        links = verifiedLinkRepository.list_for_user(user.telegram_id, linked_user.userId)
+
+    references = [link.reference for link in links]
+    limit = _parse_int_query(request, "limit", 25, 1, 100)
+    offset = _parse_int_query(request, "offset", 0, 0, 10000)
+    unread_only = _parse_bool_query(request, "unreadOnly")
+
+    messages = vmailMessageRepository.list_for_aliases(
+        references,
+        limit=limit,
+        offset=offset,
+        unread_only=unread_only,
+    )
+    return web.json_response(
+        {
+            "messages": [_serialize_vmail_message(message) for message in messages],
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+
+
+async def handle_vmail_message_read(request: web.Request):
+    user = _resolve_tma_user_from_header(request)
+    linked_user = userRepository.findUserByTelegramId(user.telegram_id)
+    if not _is_linked_tma_user(linked_user):
+        return _json_error("User is not linked", 404)
+
+    try:
+        message_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return _json_error("Message id must be an integer", 400)
+
+    message = vmailMessageRepository.mark_read(
+        message_id,
+        telegram_id=user.telegram_id,
+        user_id=linked_user.userId,
+    )
+    if message is None:
+        return _json_error("Message not found", 404)
+    return web.json_response({"message": _serialize_vmail_message(message)})
 
 
 async def handle_tma_index(_request: web.Request):

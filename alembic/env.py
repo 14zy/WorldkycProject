@@ -10,6 +10,7 @@ from config.dbConfig import Base
 from data.model.processedEmail import ProcessedEmail
 from data.model.user import User
 from data.model.verifiedLink import VerifiedLink
+from data.model.vmailMessage import VMailMessage
 
 
 config = context.config

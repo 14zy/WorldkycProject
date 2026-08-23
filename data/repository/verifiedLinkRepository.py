@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from config.dbConfig import SessionLocal
@@ -67,5 +69,40 @@ def find_by_reference(reference: str):
     db = SessionLocal()
     try:
         return db.query(VerifiedLink).filter(VerifiedLink.reference == normalized_reference).first()
+    finally:
+        db.close()
+
+
+def list_for_user(telegram_id: int, user_id: str | None = None):
+    db = SessionLocal()
+    try:
+        query = db.query(VerifiedLink).filter(VerifiedLink.telegramId == telegram_id)
+        if user_id is not None:
+            query = query.filter(VerifiedLink.userId == user_id)
+        return query.order_by(VerifiedLink.reference.asc()).all()
+    finally:
+        db.close()
+
+
+def list_for_user_references(telegram_id: int, references: list[str], user_id: str | None = None):
+    normalized_references = sorted(
+        {
+            (reference or "").strip().casefold()
+            for reference in references
+            if (reference or "").strip()
+        }
+    )
+    if not normalized_references:
+        return []
+
+    db = SessionLocal()
+    try:
+        query = db.query(VerifiedLink).filter(
+            VerifiedLink.telegramId == telegram_id,
+            VerifiedLink.reference.in_(normalized_references),
+        )
+        if user_id is not None:
+            query = query.filter(VerifiedLink.userId == user_id)
+        return query.order_by(VerifiedLink.reference.asc()).all()
     finally:
         db.close()
