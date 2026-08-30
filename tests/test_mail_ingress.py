@@ -89,6 +89,32 @@ class MailIngressTests(unittest.TestCase):
 
 
 class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_process_message_delivers_to_non_telegram_account_email_and_inbox(self):
+        message = EmailMessage()
+        message["Message-ID"] = "<msg-web@example.com>"
+        message["To"] = "VLWEB@tonstealthid.com"
+        message.set_content("Body")
+
+        verified_link = SimpleNamespace(telegramId=None, userId="wk-web-user")
+        account = SimpleNamespace(emailAddress="web-user@example.com")
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", return_value=verified_link),
+            patch("services.mailService.worldKycAccountRepository.find_by_user_id", return_value=account),
+            patch("services.mailService.telegramLinkRepository.list_active_for_user", return_value=[]),
+            patch("services.mailService._deliver_to_telegram", new_callable=AsyncMock) as deliver_to_telegram,
+            patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_to_user_email,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()),
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
+        ):
+            await _process_message("web-1", message)
+
+        deliver_to_telegram.assert_not_awaited()
+        deliver_to_user_email.assert_called_once_with(message, "vlweb", "web-user@example.com")
+        self.assertEqual(upsert_vmail.call_args.kwargs["user_id"], "wk-web-user")
+        self.assertIsNone(upsert_vmail.call_args.kwargs["telegram_id"])
+        self.assertEqual(upsert_vmail.call_args.kwargs["delivery_status"], STATUS_DELIVERED)
+
     async def test_process_message_delivers_to_telegram_and_email(self):
         message = EmailMessage()
         message["Message-ID"] = "<msg-1@example.com>"

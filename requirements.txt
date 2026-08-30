@@ -6,3 +6,4 @@ alembic~=1.13.2
 psycopg2
 requests
 aiohttp
+PyJWT[crypto]~=2.8.0

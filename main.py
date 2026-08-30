@@ -8,9 +8,8 @@ from config.config import bot
 from controller.authController import handle_request
 from controller.customerSearchHandler import handle_customer_search
 from controller.tmaController import register_tma_routes
+from controller.wkycDelegatedController import register_wkyc_delegated_routes
 from services.mailService import poll_loop as mail_ingress_loop
-from services.sessionService import refresh_sessions_loop
-from services.vlinkSyncService import sync_all_linked_users_loop
 
 from aiohttp import web
 
@@ -21,6 +20,7 @@ app = web.Application()
 app.router.add_post('/api/v1/auth', handle_request)
 app.router.add_get('/api/v1/customer-users/search', handle_customer_search)
 register_tma_routes(app)
+register_wkyc_delegated_routes(app)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,8 +45,6 @@ async def main():
     await asyncio.gather(
         start_flask(),
         start_bot(),
-        refresh_sessions_loop(),
-        sync_all_linked_users_loop(),
         mail_ingress_loop(),
     )
 

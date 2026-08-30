@@ -10,7 +10,7 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def upsert_links(telegram_id: int, user_id: str, links: list[dict]):
+def upsert_links_for_user(user_id: str, links: list[dict], telegram_id: int | None = None):
     db = SessionLocal()
     try:
         now = _utcnow()
@@ -46,10 +46,10 @@ def upsert_links(telegram_id: int, user_id: str, links: list[dict]):
         db.close()
 
 
-def delete_missing_links_for_user(telegram_id: int, references: set[str]):
+def delete_missing_links_for_account(user_id: str, references: set[str]):
     db = SessionLocal()
     try:
-        query = db.query(VerifiedLink).filter(VerifiedLink.telegramId == telegram_id)
+        query = db.query(VerifiedLink).filter(VerifiedLink.userId == user_id)
         if references:
             query = query.filter(VerifiedLink.reference.notin_(references))
         query.delete(synchronize_session=False)
@@ -73,18 +73,20 @@ def find_by_reference(reference: str):
         db.close()
 
 
-def list_for_user(telegram_id: int, user_id: str | None = None):
+def list_for_account(user_id: str):
     db = SessionLocal()
     try:
-        query = db.query(VerifiedLink).filter(VerifiedLink.telegramId == telegram_id)
-        if user_id is not None:
-            query = query.filter(VerifiedLink.userId == user_id)
-        return query.order_by(VerifiedLink.reference.asc()).all()
+        return (
+            db.query(VerifiedLink)
+            .filter(VerifiedLink.userId == user_id)
+            .order_by(VerifiedLink.reference.asc())
+            .all()
+        )
     finally:
         db.close()
 
 
-def list_for_user_references(telegram_id: int, references: list[str], user_id: str | None = None):
+def list_for_account_references(user_id: str, references: list[str]):
     normalized_references = sorted(
         {
             (reference or "").strip().casefold()
@@ -97,12 +99,72 @@ def list_for_user_references(telegram_id: int, references: list[str], user_id: s
 
     db = SessionLocal()
     try:
-        query = db.query(VerifiedLink).filter(
-            VerifiedLink.telegramId == telegram_id,
-            VerifiedLink.reference.in_(normalized_references),
+        return (
+            db.query(VerifiedLink)
+            .filter(
+                VerifiedLink.userId == user_id,
+                VerifiedLink.reference.in_(normalized_references),
+            )
+            .order_by(VerifiedLink.reference.asc())
+            .all()
         )
-        if user_id is not None:
-            query = query.filter(VerifiedLink.userId == user_id)
-        return query.order_by(VerifiedLink.reference.asc()).all()
+    finally:
+        db.close()
+
+
+# Transitional wrappers retained for callers deployed before the account cutover.
+def upsert_links(telegram_id: int, user_id: str, links: list[dict]):
+    return upsert_links_for_user(user_id, links, telegram_id=telegram_id)
+
+
+def delete_missing_links_for_user(telegram_id: int, references: set[str]):
+    db = SessionLocal()
+    try:
+        user_id = (
+            db.query(VerifiedLink.userId)
+            .filter(VerifiedLink.telegramId == telegram_id)
+            .limit(1)
+            .scalar()
+        )
+    finally:
+        db.close()
+    if user_id:
+        delete_missing_links_for_account(user_id, references)
+
+
+def list_for_user(telegram_id: int, user_id: str | None = None):
+    if user_id is not None:
+        return list_for_account(user_id)
+    db = SessionLocal()
+    try:
+        return (
+            db.query(VerifiedLink)
+            .filter(VerifiedLink.telegramId == telegram_id)
+            .order_by(VerifiedLink.reference.asc())
+            .all()
+        )
+    finally:
+        db.close()
+
+
+def list_for_user_references(telegram_id: int, references: list[str], user_id: str | None = None):
+    if user_id is not None:
+        return list_for_account_references(user_id, references)
+    normalized_references = sorted(
+        {(reference or "").strip().casefold() for reference in references if (reference or "").strip()}
+    )
+    if not normalized_references:
+        return []
+    db = SessionLocal()
+    try:
+        return (
+            db.query(VerifiedLink)
+            .filter(
+                VerifiedLink.telegramId == telegram_id,
+                VerifiedLink.reference.in_(normalized_references),
+            )
+            .order_by(VerifiedLink.reference.asc())
+            .all()
+        )
     finally:
         db.close()
