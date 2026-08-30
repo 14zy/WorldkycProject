@@ -2,11 +2,10 @@ import logging
 import time
 from aiogram.types import InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 
-import data.repository.userRepository as userRepository
+import data.repository.telegramLinkRepository as telegramLinkRepository
+import data.repository.verifiedLinkRepository as verifiedLinkRepository
 from aiogram import Router
-from api.worldKycApi import extract_verified_links, get_verified_links
 from config.config import WKYC_VLINK_BASE_URL
-from services.sessionService import AuthSessionExpiredError, SessionNotLinkedError, call_with_valid_session
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,9 +16,14 @@ _inline_links_cache = {}
 
 
 def _searchable_fields(link):
-    reference = str(link.get("verifiedLinkReference") or link.get("reference") or "")
-    name = str(link.get("verifiedLinkName") or link.get("name") or "")
-    link_id = str(link.get("verifiedLinkId") or link.get("id") or "")
+    if isinstance(link, dict):
+        reference = str(link.get("verifiedLinkReference") or link.get("reference") or "")
+        name = str(link.get("verifiedLinkName") or link.get("name") or "")
+        link_id = str(link.get("verifiedLinkId") or link.get("id") or reference)
+    else:
+        reference = str(link.reference or "")
+        name = str(link.name or "")
+        link_id = reference
     url = f"{WKYC_VLINK_BASE_URL}{reference}" if reference else ""
     return reference, name, link_id, url
 
@@ -46,13 +50,6 @@ def _get_cached_links(user_id: int):
     return entry["links"]
 
 
-def _get_stale_links(user_id: int):
-    entry = _inline_links_cache.get(user_id)
-    if not entry:
-        return None
-    return entry["links"]
-
-
 def _store_cached_links(user_id: int, links):
     _inline_links_cache[user_id] = {
         "links": links,
@@ -63,54 +60,25 @@ def _store_cached_links(user_id: int, links):
 @router.inline_query()
 async def inline(query: InlineQuery):
     user_id = query.from_user.id
-    user = userRepository.findUserByTelegramId(user_id)
+    account_link = telegramLinkRepository.find_active_by_telegram_id(user_id)
     links = _get_cached_links(user_id)
-    session_expired = False
-    if links is None and user and user.accessToken and user.refreshToken:
-        try:
-            result = await call_with_valid_session(user_id, lambda token: get_verified_links(token))
-        except AuthSessionExpiredError:
-            session_expired = True
-            links = None
-        except SessionNotLinkedError:
-            links = None
-        else:
-            if result.get("ok"):
-                links = extract_verified_links(result.get("payload"))
-                _store_cached_links(user_id, links)
-                logger.info(
-                    "Inline cache refresh telegram_id=%s links=%s query=%r",
-                    user_id,
-                    len(links),
-                    query.query,
-                )
-            else:
-                links = _get_stale_links(user_id)
-                logger.warning(
-                    "Inline upstream failure telegram_id=%s status=%s query=%r details=%s stale_cache=%s",
-                    user_id,
-                    result.get("status_code"),
-                    query.query,
-                    result.get("details"),
-                    bool(links),
-                )
-
-    if session_expired:
-        item = InlineQueryResultArticle(
-            id="session-expired",
-            title="Session expired",
-            input_message_content=InputTextMessageContent(
-                message_text="WorldKyc session expired. Open the Mini App and sign in again."
-            ),
-            description="Open the Mini App and relink your WorldKyc account.",
+    if links is None and account_link is not None:
+        links = verifiedLinkRepository.list_for_account(account_link.userId)
+        _store_cached_links(user_id, links)
+        logger.info(
+            "Inline account cache refresh telegram_id=%s user_id=%s links=%s query=%r",
+            user_id,
+            account_link.userId,
+            len(links),
+            query.query,
         )
-        await query.answer([item], cache_time=1, is_personal=True)
-    elif not user or not user.accessToken:
+
+    if account_link is None:
         item = InlineQueryResultArticle(
             id="1",
-            title="You are not logged in",
+            title="Telegram account is not linked",
             input_message_content=InputTextMessageContent(
-                message_text="You are not logged in"
+                message_text="Open the Mini App to connect your WorldKYC account."
             ),
         )
         await query.answer([item], cache_time=1, is_personal=True)
@@ -121,16 +89,17 @@ async def inline(query: InlineQuery):
             input_message_content=InputTextMessageContent(
                 message_text="Vlinks are temporarily unavailable. Please try again in a moment."
             ),
-            description="The upstream WorldKyc API did not respond in time.",
+            description="Your synchronized WorldKYC VLinks are temporarily unavailable.",
         )
         await query.answer([item], cache_time=1, is_personal=True)
     else:
         answer_item = []
         matched_links = [link for link in links if _matches_query(link, query.query)]
         for link in matched_links[:50]:
-            verified_link_id = str(link.get("verifiedLinkId") or link.get("id") or len(answer_item) + 1)
-            verified_link_reference = link.get("verifiedLinkReference") or link.get("reference") or "unknown"
-            verified_link_name = link.get("verifiedLinkName") or link.get("name") or "Unnamed"
+            verified_link_reference, verified_link_name, verified_link_id, _url = _searchable_fields(link)
+            verified_link_reference = verified_link_reference or "unknown"
+            verified_link_name = verified_link_name or "Unnamed"
+            verified_link_id = verified_link_id or str(len(answer_item) + 1)
             item = InlineQueryResultArticle(
                 id=verified_link_id,
                 title=f"{verified_link_reference} ({verified_link_name})",

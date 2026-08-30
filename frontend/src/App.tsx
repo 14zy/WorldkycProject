@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 type TelegramUser = {
   id: number;
@@ -26,6 +26,11 @@ type LoginPayload = {
 type LogoutPayload = {
   linked: boolean;
   telegramUser: TelegramUser;
+};
+
+type ConnectionCodePayload = {
+  connectUrl: string;
+  expiresAt: string;
 };
 
 type VLinkItem = {
@@ -94,11 +99,9 @@ export function App() {
   const [bootstrapError, setBootstrapError] = useState("");
   const [telegramUser, setTelegramUser] = useState<TelegramUser | null>(null);
   const [linked, setLinked] = useState(false);
-  const [loginId, setLoginId] = useState("");
-  const [password, setPassword] = useState("");
-  const [loginState, setLoginState] = useState<AsyncState>("idle");
-  const [loginError, setLoginError] = useState("");
   const [loginSummary, setLoginSummary] = useState<LoginPayload["user"] | null>(null);
+  const [connectState, setConnectState] = useState<AsyncState>("idle");
+  const [connectError, setConnectError] = useState("");
   const [logoutState, setLogoutState] = useState<AsyncState>("idle");
   const [logoutError, setLogoutError] = useState("");
   const [logoutChipArmed, setLogoutChipArmed] = useState(false);
@@ -173,7 +176,7 @@ export function App() {
           setVlinks([]);
           setVlinksState("idle");
           setVlinksError("");
-          setLoginError("Session expired. Sign in again.");
+          setConnectError("Your account link is no longer active. Connect it again.");
           return;
         }
         setVlinksState("error");
@@ -192,38 +195,33 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [copyNotice]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleConnect() {
     if (!initData) {
       return;
     }
 
-    setLoginState("loading");
-    setLoginError("");
+    setConnectState("loading");
+    setConnectError("");
 
     try {
-      const payload = await fetch("/api/tma/login", {
+      const payload = await fetch("/api/tma/connect/code", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          initData,
-          loginId,
-          password,
-        }),
-      }).then(readJson<LoginPayload>);
+        body: JSON.stringify({ initData }),
+      }).then(readJson<ConnectionCodePayload>);
 
-      setLinked(payload.linked);
-      setTelegramUser(payload.telegramUser);
-      setLoginSummary(payload.user ?? null);
-      setLogoutError("");
-      setLogoutState("idle");
-      setPassword("");
-      setLoginState("success");
+      setConnectState("success");
+      const tg = getTelegramWebApp();
+      if (tg?.openLink) {
+        tg.openLink(payload.connectUrl);
+      } else {
+        window.location.assign(payload.connectUrl);
+      }
     } catch (error) {
-      setLoginState("error");
-      setLoginError(error instanceof Error ? error.message : "Login failed.");
+      setConnectState("error");
+      setConnectError(error instanceof Error ? error.message : "Unable to start connection.");
     }
   }
 
@@ -254,9 +252,8 @@ export function App() {
 
       setLinked(payload.linked);
       setTelegramUser(payload.telegramUser);
-      setLoginId("");
-      setPassword("");
-      setLoginError("");
+      setConnectError("");
+      setConnectState("idle");
       setLoginSummary(null);
       setVlinks([]);
       setVlinksState("idle");
@@ -319,34 +316,18 @@ export function App() {
               {telegramUser ? formatTelegramName(telegramUser) : "Telegram user"}
             </span>
           </div>
-          <form className="auth-form" onSubmit={handleSubmit}>
-            <label>
-              <span>Login</span>
-              <input
-                type="text"
-                autoComplete="username"
-                value={loginId}
-                onChange={(event) => setLoginId(event.target.value)}
-                placeholder="username"
-                required
-              />
-            </label>
-            <label>
-              <span>Password</span>
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="password"
-                required
-              />
-            </label>
-            <button type="submit" disabled={loginState === "loading"}>
-              {loginState === "loading" ? "Signing in..." : "Link account"}
-            </button>
-          </form>
-          {loginError ? <p className="feedback feedback--error">{loginError}</p> : null}
+          <p>Continue to WorldKYC to connect this Telegram account. Your password stays on WorldKYC.</p>
+          <button
+            type="button"
+            onClick={() => void handleConnect()}
+            disabled={connectState === "loading"}
+          >
+            {connectState === "loading" ? "Preparing connection..." : "Continue to WorldKYC"}
+          </button>
+          {connectState === "success" ? (
+            <p className="feedback">Complete the connection in the WorldKYC page, then reopen this Mini App.</p>
+          ) : null}
+          {connectError ? <p className="feedback feedback--error">{connectError}</p> : null}
         </section>
       ) : null}
 
@@ -385,7 +366,7 @@ export function App() {
             <p>
               {loginSummary?.organizationName
                 ? `Account: ${loginSummary.organizationName} is now linked to Telegram: ${formatTelegramName(telegramUser)}.`
-                : `Your Telegram account is linked. Inline mode can use the same access token.`}
+                : `Your Telegram account is linked. Inline mode uses your synchronized WorldKYC VLinks.`}
             </p>
             {loginSummary?.emailAddress ? (
               <p className="meta-line">Main E-mail: {loginSummary.emailAddress}</p>

@@ -3,11 +3,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl
 
-from config.config import BOT_TOKEN
+from config.config import (
+    BOT_TOKEN,
+    TELEGRAM_INIT_DATA_FUTURE_SKEW_SECONDS,
+    TELEGRAM_INIT_DATA_MAX_AGE_SECONDS,
+)
 
 
 class TelegramMiniAppAuthError(ValueError):
@@ -67,7 +72,22 @@ def _resolve_user(params: dict[str, str]) -> TelegramMiniAppUser:
     )
 
 
-def authenticate_mini_app_user(init_data: str) -> TelegramMiniAppUser:
+def _validate_auth_date(params: dict[str, str], *, now: int) -> None:
+    raw_auth_date = params.get("auth_date")
+    if raw_auth_date is None:
+        raise TelegramMiniAppAuthError("Telegram initData auth_date is missing")
+    try:
+        auth_date = int(raw_auth_date)
+    except ValueError as exc:
+        raise TelegramMiniAppAuthError("Telegram initData auth_date is invalid") from exc
+
+    if auth_date > now + TELEGRAM_INIT_DATA_FUTURE_SKEW_SECONDS:
+        raise TelegramMiniAppAuthError("Telegram initData auth_date is in the future")
+    if now - auth_date > TELEGRAM_INIT_DATA_MAX_AGE_SECONDS:
+        raise TelegramMiniAppAuthError("Telegram initData has expired")
+
+
+def authenticate_mini_app_user(init_data: str, *, now: int | None = None) -> TelegramMiniAppUser:
     if not BOT_TOKEN:
         raise TelegramMiniAppAuthError("BOT_TOKEN is not configured")
     if not init_data:
@@ -88,4 +108,5 @@ def authenticate_mini_app_user(init_data: str) -> TelegramMiniAppUser:
     if not hmac.compare_digest(expected_hash, provided_hash):
         raise TelegramMiniAppAuthError("Telegram initData signature is invalid")
 
+    _validate_auth_date(params, now=int(time.time()) if now is None else now)
     return _resolve_user(params)

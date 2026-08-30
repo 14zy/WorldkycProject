@@ -1,4 +1,5 @@
 import os
+import json
 
 try:
     from aiogram import Bot
@@ -30,9 +31,33 @@ def _get_bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _get_json_env(name: str, default):
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_INIT_DATA_MAX_AGE_SECONDS = _get_int_env("TELEGRAM_INIT_DATA_MAX_AGE_SECONDS", 3600)
+TELEGRAM_INIT_DATA_FUTURE_SKEW_SECONDS = _get_int_env("TELEGRAM_INIT_DATA_FUTURE_SKEW_SECONDS", 30)
+WKYC_ASSERTION_ISSUER = os.getenv("WKYC_ASSERTION_ISSUER", "worldkyc-web")
+WKYC_ASSERTION_AUDIENCE = os.getenv("WKYC_ASSERTION_AUDIENCE", "worldkyc-tma")
+WKYC_ASSERTION_PUBLIC_KEY = os.getenv("WKYC_ASSERTION_PUBLIC_KEY")
+WKYC_ASSERTION_KEY_ID = os.getenv("WKYC_ASSERTION_KEY_ID", "default")
+WKYC_ASSERTION_PUBLIC_KEYS = _get_json_env("WKYC_ASSERTION_PUBLIC_KEYS_JSON", {})
+WKYC_ASSERTION_MAX_LIFETIME_SECONDS = _get_int_env("WKYC_ASSERTION_MAX_LIFETIME_SECONDS", 300)
+WKYC_ASSERTION_CLOCK_SKEW_SECONDS = _get_int_env("WKYC_ASSERTION_CLOCK_SKEW_SECONDS", 30)
+WKYC_TELEGRAM_CONNECT_URL = os.getenv(
+    "WKYC_TELEGRAM_CONNECT_URL",
+    "https://app.worldkyc.com/connect-telegram",
+)
+TELEGRAM_CONNECT_CODE_TTL_SECONDS = _get_int_env("TELEGRAM_CONNECT_CODE_TTL_SECONDS", 300)
 AUTHORIZED_TOKEN = os.getenv("AUTHORIZED_TOKEN")
 WKYC_BASE_URL = os.getenv("WKYC_BASE_URL", "https://www.bizcurrency.com:20500").rstrip("/")
 WKYC_VLINK_BASE_URL = os.getenv("WKYC_VLINK_BASE_URL", "https://app.worldkyc.com/vl/").rstrip("/") + "/"

@@ -13,6 +13,8 @@ import data.repository.processedEmailRepository as processedEmailRepository
 import data.repository.userRepository as userRepository
 import data.repository.verifiedLinkRepository as verifiedLinkRepository
 import data.repository.vmailMessageRepository as vmailMessageRepository
+import data.repository.telegramLinkRepository as telegramLinkRepository
+import data.repository.worldKycAccountRepository as worldKycAccountRepository
 from config.config import (
     IMAP_HOST,
     IMAP_MAILBOX,
@@ -247,9 +249,9 @@ async def _process_message(uid: str, message: Message):
         logger.warning("Skipping IMAP message uid=%s message_id=%s without recipient alias", uid, message_id)
         return
 
-    delivered_any = False
+    resolved_any = False
     resolved_deliveries = []
-    target_deliveries: dict[int, tuple[str, object]] = {}
+    target_deliveries: dict[str, tuple[str, object]] = {}
     unmatched_aliases: list[str] = []
     aggregate_status: str | None = None
     aggregate_alias: str | None = None
@@ -260,54 +262,83 @@ async def _process_message(uid: str, message: Message):
             unmatched_aliases.append(alias)
             continue
         resolved_deliveries.append((alias, verified_link))
-        target_deliveries.setdefault(verified_link.telegramId, (alias, verified_link))
+        owner_user_id = getattr(verified_link, "userId", None)
+        owner_key = f"user:{owner_user_id}" if owner_user_id else f"telegram:{verified_link.telegramId}"
+        target_deliveries.setdefault(owner_key, (alias, verified_link))
 
-    delivery_results: dict[int, tuple[str, str | None]] = {}
-    for telegram_id, (alias, _verified_link) in target_deliveries.items():
-        text = _build_telegram_message(message, alias)
-        await _deliver_to_telegram(telegram_id, text)
-        delivered_any = True
+    delivery_results: dict[str, tuple[str, str | None, int | None]] = {}
+    for owner_key, (alias, verified_link) in target_deliveries.items():
+        owner_user_id = getattr(verified_link, "userId", None)
+        account = worldKycAccountRepository.find_by_user_id(owner_user_id) if owner_user_id else None
+        active_telegram_links = (
+            telegramLinkRepository.list_active_for_user(owner_user_id) if owner_user_id else []
+        )
+        telegram_ids = [link.telegramId for link in active_telegram_links]
+        legacy_telegram_id = getattr(verified_link, "telegramId", None)
+        if not telegram_ids and legacy_telegram_id is not None:
+            telegram_ids = [legacy_telegram_id]
+
+        telegram_delivered = False
+        for telegram_id in telegram_ids:
+            text = _build_telegram_message(message, alias)
+            await _deliver_to_telegram(telegram_id, text)
+            telegram_delivered = True
+
+        resolved_any = True
         if aggregate_alias is None:
             aggregate_alias = alias
 
-        status = STATUS_TELEGRAM_ONLY
+        status = STATUS_TELEGRAM_ONLY if telegram_delivered else STATUS_PARTIAL
         error = None
-        user = userRepository.findUserByTelegramId(telegram_id)
-        if user and getattr(user, "emailAddress", None):
+        legacy_user = (
+            userRepository.findUserByTelegramId(legacy_telegram_id)
+            if account is None and legacy_telegram_id is not None
+            else None
+        )
+        email_address = (
+            getattr(account, "emailAddress", None)
+            or getattr(legacy_user, "emailAddress", None)
+        )
+        if email_address:
             try:
-                _deliver_to_user_email(message, alias, user.emailAddress)
+                _deliver_to_user_email(message, alias, email_address)
                 status = STATUS_DELIVERED
             except Exception as exc:
                 status = STATUS_PARTIAL
                 error = str(exc)
                 logger.warning(
-                    "Outbound alias forwarding failed uid=%s message_id=%s alias=%s telegramId=%s email=%s: %s",
+                    "Outbound alias forwarding failed uid=%s message_id=%s alias=%s userId=%s email=%s: %s",
                     uid,
                     message_id,
                     alias,
-                    telegram_id,
-                    user.emailAddress,
+                    owner_user_id,
+                    email_address,
                     exc,
                 )
         else:
-            error = "User email address not available"
+            error = "User email address not available" if telegram_delivered else "No delivery channel available"
 
-        delivery_results[telegram_id] = (status, error)
+        delivery_results[owner_key] = (status, error, telegram_ids[0] if telegram_ids else None)
         aggregate_status = _merge_status(aggregate_status, status)
         if error and error not in aggregate_errors:
             aggregate_errors.append(error)
 
-    if delivered_any:
+    if resolved_any:
         inbox_content = _extract_inbox_content(message)
         for alias, verified_link in resolved_deliveries:
-            status, error = delivery_results.get(verified_link.telegramId, (STATUS_TELEGRAM_ONLY, None))
+            owner_user_id = getattr(verified_link, "userId", None)
+            owner_key = f"user:{owner_user_id}" if owner_user_id else f"telegram:{verified_link.telegramId}"
+            status, error, delivery_telegram_id = delivery_results.get(
+                owner_key,
+                (STATUS_PARTIAL, "No delivery channel available", None),
+            )
             vmailMessageRepository.upsert_from_processed_message(
                 mailbox=IMAP_MAILBOX,
                 imap_uid=uid,
                 message_id=message_id,
                 recipient_alias=alias,
-                telegram_id=verified_link.telegramId,
-                user_id=getattr(verified_link, "userId", None),
+                telegram_id=delivery_telegram_id,
+                user_id=owner_user_id,
                 from_header=inbox_content["from_header"],
                 reply_to=inbox_content["reply_to"],
                 subject=inbox_content["subject"],
@@ -317,7 +348,7 @@ async def _process_message(uid: str, message: Message):
                 received_at=inbox_content["received_at"],
             )
 
-    if delivered_any:
+    if resolved_any:
         processedEmailRepository.mark_processed(
             IMAP_MAILBOX,
             uid,
@@ -327,7 +358,7 @@ async def _process_message(uid: str, message: Message):
             error="; ".join(aggregate_errors) if aggregate_errors else None,
         )
 
-    if unmatched_aliases and delivered_any:
+    if unmatched_aliases and resolved_any:
         logger.info(
             "IMAP message uid=%s message_id=%s delivered with unmatched aliases=%s",
             uid,
@@ -335,7 +366,7 @@ async def _process_message(uid: str, message: Message):
             ",".join(unmatched_aliases),
         )
 
-    if not delivered_any:
+    if not resolved_any:
         for alias in unmatched_aliases:
             logger.warning("No local verified link match for uid=%s message_id=%s alias=%s", uid, message_id, alias)
         logger.warning("IMAP message uid=%s message_id=%s had no deliverable recipients", uid, message_id)

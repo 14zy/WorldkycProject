@@ -11,20 +11,18 @@ from aiohttp import web
 import data.repository.userRepository as userRepository
 import data.repository.verifiedLinkRepository as verifiedLinkRepository
 import data.repository.vmailMessageRepository as vmailMessageRepository
+import data.repository.telegramLinkRepository as telegramLinkRepository
+import data.repository.telegramConnectionCodeRepository as telegramConnectionCodeRepository
+import data.repository.worldKycAccountRepository as worldKycAccountRepository
 from api.worldKycApi import (
     authenticate,
     extract_tokens,
     extract_user_id,
-    extract_verified_links,
-    get_verified_links,
 )
-from config.config import WKYC_VLINK_BASE_URL
+from config.config import WKYC_TELEGRAM_CONNECT_URL, WKYC_VLINK_BASE_URL
 from services.sessionService import (
-    AUTH_SESSION_EXPIRED_CODE,
     AuthSessionExpiredError,
     SessionNotLinkedError,
-    call_with_valid_session,
-    resolve_link_state,
     store_login_session,
 )
 from services.vlinkSyncService import sync_user_vlinks
@@ -41,6 +39,7 @@ def register_tma_routes(app: web.Application):
     app.router.add_post("/api/tma/bootstrap", handle_bootstrap)
     app.router.add_post("/api/tma/login", handle_login)
     app.router.add_post("/api/tma/logout", handle_logout)
+    app.router.add_post("/api/tma/connect/code", handle_connection_code)
     app.router.add_get("/api/tma/vlinks", handle_vlinks)
     app.router.add_get("/api/tma/vmail/messages", handle_vmail_messages)
     app.router.add_post("/api/tma/vmail/messages/{id}/read", handle_vmail_message_read)
@@ -54,13 +53,6 @@ def _json_error(message: str, status: int, *, details=None):
     if details is not None:
         payload["details"] = details
     return web.json_response(payload, status=status)
-
-
-def _session_expired_response():
-    return web.json_response(
-        {"error": "Session expired", "code": AUTH_SESSION_EXPIRED_CODE},
-        status=401,
-    )
 
 
 def _build_upstream_error(result):
@@ -167,8 +159,11 @@ def _serialize_vmail_message(message):
     }
 
 
-def _is_linked_tma_user(linked_user) -> bool:
-    return bool(linked_user and linked_user.userId and linked_user.accessToken and linked_user.refreshToken)
+def _resolve_account_for_telegram_id(telegram_id: int):
+    link = telegramLinkRepository.find_active_by_telegram_id(telegram_id)
+    if link is None:
+        return None, None
+    return link, worldKycAccountRepository.find_by_user_id(link.userId)
 
 
 async def _resolve_tma_user_from_json(request: web.Request):
@@ -215,38 +210,28 @@ def _resolve_tma_user_from_header(request: web.Request):
         )
 
 
-def _normalize_vlinks(payload):
-    items = []
-    for link in extract_verified_links(payload):
-        reference = link.get("verifiedLinkReference") or link.get("reference")
-        name = link.get("verifiedLinkName") or link.get("name") or "Unnamed"
-        status = link.get("verifiedLinkStatusTypeName") or link.get("statusTypeName") or "Unknown"
-        if not reference:
-            continue
-        link_id = str(link.get("verifiedLinkId") or link.get("id") or reference)
-        items.append(
-            {
-                "id": link_id,
-                "reference": reference,
-                "name": name,
-                "status": status,
-                "url": f"{WKYC_VLINK_BASE_URL}{reference}",
-            }
-        )
-    return items
+def _serialize_stored_vlink(link):
+    return {
+        "id": link.reference,
+        "reference": link.reference,
+        "name": link.name or "Unnamed",
+        "status": link.status or "Unknown",
+        "url": f"{WKYC_VLINK_BASE_URL}{link.reference}",
+    }
 
 
 async def handle_bootstrap(request: web.Request):
     user, _data = await _resolve_tma_user_from_json(request)
-    linked_user, linked = await resolve_link_state(user.telegram_id)
+    link, account = _resolve_account_for_telegram_id(user.telegram_id)
+    linked = bool(link and account)
     return web.json_response(
         {
             "telegramUser": user.to_dict(),
             "linked": linked,
             "user": {
                 "telegramId": user.telegram_id,
-                "userId": linked_user.userId if linked_user else None,
-                "emailAddress": linked_user.emailAddress if linked_user else None,
+                "userId": account.userId if account else None,
+                "emailAddress": account.emailAddress if account else None,
             },
         }
     )
@@ -309,6 +294,12 @@ async def handle_login(request: web.Request):
 
     upstream_user_id = extract_user_id(payload, fallback=login_id)
     store_login_session(user.telegram_id, upstream_user_id, payload)
+    user_settings = payload.get("userSettings") if isinstance(payload, dict) else {}
+    worldKycAccountRepository.upsert(upstream_user_id, user_settings.get("emailAddress"))
+    try:
+        telegramLinkRepository.link(user.telegram_id, upstream_user_id)
+    except ValueError as exc:
+        return _json_error(str(exc), 409)
     logger.info(
         "TMA login linked telegramId=%s loginId=%s userId=%s",
         user.telegram_id,
@@ -319,7 +310,6 @@ async def handle_login(request: web.Request):
         await sync_user_vlinks(user.telegram_id)
     except (AuthSessionExpiredError, SessionNotLinkedError, RuntimeError) as exc:
         logger.warning("Initial verified link sync failed for telegramId=%s: %s", user.telegram_id, exc)
-    user_settings = payload.get("userSettings") if isinstance(payload, dict) else {}
     return web.json_response(
         {
             "linked": True,
@@ -338,6 +328,7 @@ async def handle_login(request: web.Request):
 async def handle_logout(request: web.Request):
     user, _data = await _resolve_tma_user_from_json(request)
     userRepository.clearUserTokens(user.telegram_id)
+    telegramLinkRepository.revoke(user.telegram_id)
     return web.json_response(
         {
             "linked": False,
@@ -346,53 +337,42 @@ async def handle_logout(request: web.Request):
     )
 
 
+async def handle_connection_code(request: web.Request):
+    user, _data = await _resolve_tma_user_from_json(request)
+    active_link = telegramLinkRepository.find_active_by_telegram_id(user.telegram_id)
+    if active_link is not None:
+        return _json_error("Telegram account is already linked", 409)
+    code, record = telegramConnectionCodeRepository.create(user.telegram_id)
+    separator = "&" if "?" in WKYC_TELEGRAM_CONNECT_URL else "?"
+    return web.json_response(
+        {
+            "connectUrl": f"{WKYC_TELEGRAM_CONNECT_URL}{separator}code={code}",
+            "expiresAt": _isoformat_utc(record.expiresAt),
+        },
+        status=201,
+    )
+
+
 async def handle_vlinks(request: web.Request):
     user = _resolve_tma_user_from_header(request)
-    linked_user = userRepository.findUserByTelegramId(user.telegram_id)
-    if linked_user is None or not linked_user.accessToken or not linked_user.refreshToken:
+    link, account = _resolve_account_for_telegram_id(user.telegram_id)
+    if link is None or account is None:
         return _json_error("User is not linked", 404)
-
-    try:
-        result = await call_with_valid_session(
-            user.telegram_id,
-            lambda token: get_verified_links(token),
-        )
-    except AuthSessionExpiredError:
-        return _session_expired_response()
-    except SessionNotLinkedError:
-        return _json_error("User is not linked", 404)
-    if not result.get("ok"):
-        logger.error(
-            "Verified links upstream failure for telegramId=%s: status=%s details=%s",
-            user.telegram_id,
-            result.get("status_code"),
-            result.get("details"),
-        )
-        return _build_upstream_error(result)
-
-    try:
-        await sync_user_vlinks(user.telegram_id, payload=result.get("payload"))
-    except (AuthSessionExpiredError, SessionNotLinkedError, RuntimeError) as exc:
-        logger.warning("Verified link cache sync failed for telegramId=%s: %s", user.telegram_id, exc)
-
-    return web.json_response({"items": _normalize_vlinks(result.get("payload"))})
+    links = verifiedLinkRepository.list_for_account(account.userId)
+    return web.json_response({"items": [_serialize_stored_vlink(stored_link) for stored_link in links]})
 
 
 async def handle_vmail_messages(request: web.Request):
     user = _resolve_tma_user_from_header(request)
-    linked_user = userRepository.findUserByTelegramId(user.telegram_id)
-    if not _is_linked_tma_user(linked_user):
+    link, account = _resolve_account_for_telegram_id(user.telegram_id)
+    if link is None or account is None:
         return _json_error("User is not linked", 404)
 
     requested_references = _split_references(request.query.get("references"))
     if requested_references:
-        links = verifiedLinkRepository.list_for_user_references(
-            user.telegram_id,
-            requested_references,
-            linked_user.userId,
-        )
+        links = verifiedLinkRepository.list_for_account_references(account.userId, requested_references)
     else:
-        links = verifiedLinkRepository.list_for_user(user.telegram_id, linked_user.userId)
+        links = verifiedLinkRepository.list_for_account(account.userId)
 
     references = [link.reference for link in links]
     limit = _parse_int_query(request, "limit", 25, 1, 100)
@@ -416,8 +396,8 @@ async def handle_vmail_messages(request: web.Request):
 
 async def handle_vmail_message_read(request: web.Request):
     user = _resolve_tma_user_from_header(request)
-    linked_user = userRepository.findUserByTelegramId(user.telegram_id)
-    if not _is_linked_tma_user(linked_user):
+    link, account = _resolve_account_for_telegram_id(user.telegram_id)
+    if link is None or account is None:
         return _json_error("User is not linked", 404)
 
     try:
@@ -427,8 +407,7 @@ async def handle_vmail_message_read(request: web.Request):
 
     message = vmailMessageRepository.mark_read(
         message_id,
-        telegram_id=user.telegram_id,
-        user_id=linked_user.userId,
+        user_id=account.userId,
     )
     if message is None:
         return _json_error("Message not found", 404)

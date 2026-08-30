@@ -17,6 +17,7 @@ type TelegramWebApp = {
   expand(): void;
   setHeaderColor?(color: string): void;
   setBackgroundColor?(color: string): void;
+  openLink?(url: string): void;
 };
 
 declare global {

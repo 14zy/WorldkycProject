@@ -8,9 +8,12 @@ from sqlalchemy import engine_from_config, pool
 
 from config.dbConfig import Base
 from data.model.processedEmail import ProcessedEmail
+from data.model.telegramLink import TelegramLink
+from data.model.telegramConnectionCode import TelegramConnectionCode
 from data.model.user import User
 from data.model.verifiedLink import VerifiedLink
 from data.model.vmailMessage import VMailMessage
+from data.model.worldKycAccount import WorldKycAccount
 
 
 config = context.config

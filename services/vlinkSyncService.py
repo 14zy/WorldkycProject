@@ -27,8 +27,8 @@ def _normalize_link_payload(payload) -> list[dict]:
 
 def _persist_synced_links(telegram_id: int, user_id: str, payload):
     links = _normalize_link_payload(payload)
-    references = verifiedLinkRepository.upsert_links(telegram_id, user_id, links)
-    verifiedLinkRepository.delete_missing_links_for_user(telegram_id, references)
+    references = verifiedLinkRepository.upsert_links_for_user(user_id, links, telegram_id=telegram_id)
+    verifiedLinkRepository.delete_missing_links_for_account(user_id, references)
     return references
 
 
