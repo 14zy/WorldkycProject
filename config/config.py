@@ -78,7 +78,10 @@ IMAP_POLL_INTERVAL_SECONDS = _get_int_env("IMAP_POLL_INTERVAL_SECONDS", 60)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RESEND_BASE_URL = os.getenv("RESEND_BASE_URL", "https://api.resend.com").rstrip("/")
 RESEND_TIMEOUT_SECONDS = _get_int_env("RESEND_TIMEOUT_SECONDS", 15)
+RESEND_WEBHOOK_SECRET = os.getenv("RESEND_WEBHOOK_SECRET")
 MAIL_FROM_DOMAIN = os.getenv("MAIL_FROM_DOMAIN", "tonstealthid.com").strip()
+VMAIL_ACCOUNT_SEND_LIMIT_PER_HOUR = _get_int_env("VMAIL_ACCOUNT_SEND_LIMIT_PER_HOUR", 30)
+VMAIL_LINK_SEND_LIMIT_PER_HOUR = _get_int_env("VMAIL_LINK_SEND_LIMIT_PER_HOUR", 10)
 
 url_webapp = "https://t.me/tonstealthid_bot"
 bot = Bot(token=BOT_TOKEN) if Bot and BOT_TOKEN else None

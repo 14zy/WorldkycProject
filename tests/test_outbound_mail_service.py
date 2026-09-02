@@ -2,7 +2,13 @@ import unittest
 from urllib.error import HTTPError, URLError
 from unittest.mock import Mock, patch
 
-from services.outboundMailService import _post_resend_email, build_forward_email, send_forward_email
+from services.outboundMailService import (
+    ResendProviderError,
+    _post_resend_email,
+    build_forward_email,
+    send_forward_email,
+    send_vmail_email,
+)
 
 
 class OutboundMailServiceTests(unittest.TestCase):
@@ -114,6 +120,60 @@ class OutboundMailServiceTests(unittest.TestCase):
                 subject="Original subject",
                 body="Body line",
             )
+
+    @patch("services.outboundMailService.RESEND_API_KEY", "resend-test-key")
+    @patch("services.outboundMailService.MAIL_FROM_DOMAIN", "tonstealthid.com")
+    @patch("services.outboundMailService._post_resend_email")
+    def test_send_vmail_email_uses_idempotency_and_thread_headers(self, post_resend_email: Mock):
+        post_resend_email.return_value = Mock(read=Mock(return_value=b'{"id":"resend-123"}'))
+
+        result = send_vmail_email(
+            from_address="vl1@tonstealthid.com",
+            to_address="recipient@example.com",
+            subject="Re: Subject",
+            text="Reply",
+            in_reply_to="<message@example.com>",
+            references="<older@example.com> <message@example.com>",
+            idempotency_key="vmail:account:request",
+        )
+
+        self.assertEqual(result, "resend-123")
+        post_resend_email.assert_called_once_with(
+            {
+                "from": "vl1@tonstealthid.com",
+                "to": ["recipient@example.com"],
+                "subject": "Re: Subject",
+                "text": "Reply",
+                "headers": {
+                    "In-Reply-To": "<message@example.com>",
+                    "References": "<older@example.com> <message@example.com>",
+                },
+            },
+            idempotency_key="vmail:account:request",
+        )
+
+    @patch("services.outboundMailService.RESEND_API_KEY", "resend-test-key")
+    @patch("services.outboundMailService.MAIL_FROM_DOMAIN", "tonstealthid.com")
+    @patch("services.outboundMailService._post_resend_email")
+    def test_send_vmail_email_sanitizes_provider_http_failure(self, post_resend_email: Mock):
+        post_resend_email.side_effect = HTTPError(
+            url="https://api.resend.com/emails",
+            code=422,
+            msg="unprocessable",
+            hdrs=None,
+            fp=Mock(read=Mock(return_value=b'{"message":"secret provider detail"}')),
+        )
+
+        with self.assertRaises(ResendProviderError) as raised:
+            send_vmail_email(
+                from_address="vl1@tonstealthid.com",
+                to_address="recipient@example.com",
+                subject="Subject",
+                text="Text",
+                idempotency_key="vmail:account:request",
+            )
+        self.assertEqual(raised.exception.category, "http_422")
+        self.assertNotIn("secret provider detail", str(raised.exception))
 
 
 if __name__ == "__main__":

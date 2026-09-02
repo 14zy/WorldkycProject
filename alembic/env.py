@@ -14,6 +14,7 @@ from data.model.user import User
 from data.model.verifiedLink import VerifiedLink
 from data.model.vmailMessage import VMailMessage
 from data.model.worldKycAccount import WorldKycAccount
+from data.model.outboundVmailMessage import OutboundVmailMessage, ResendWebhookEvent
 
 
 config = context.config

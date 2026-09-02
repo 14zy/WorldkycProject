@@ -32,6 +32,7 @@ def upsert_from_processed_message(
     mailbox: str,
     imap_uid: str,
     message_id: str | None,
+    references: str | None = None,
     recipient_alias: str,
     telegram_id: int | None,
     user_id: str | None,
@@ -63,6 +64,7 @@ def upsert_from_processed_message(
             db.add(message)
 
         message.message_id = message_id
+        message.references = references
         message.telegramId = telegram_id
         message.userId = user_id
         message.from_header = from_header
