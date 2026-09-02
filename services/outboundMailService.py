@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import json
 from email.message import EmailMessage
@@ -50,7 +52,14 @@ def _build_resend_payload(message: EmailMessage) -> dict[str, object]:
     return payload
 
 
-def _post_resend_email(payload: dict[str, object]):
+class ResendProviderError(RuntimeError):
+    def __init__(self, category: str, *, temporary: bool):
+        super().__init__("Resend email submission failed")
+        self.category = category
+        self.temporary = temporary
+
+
+def _post_resend_email(payload: dict[str, object], *, idempotency_key: str | None = None):
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
         f"{RESEND_BASE_URL}{RESEND_EMAILS_PATH}",
@@ -59,6 +68,7 @@ def _post_resend_email(payload: dict[str, object]):
             "Authorization": f"Bearer {RESEND_API_KEY}",
             "Content-Type": "application/json",
             "User-Agent": RESEND_USER_AGENT,
+            **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
         },
         method="POST",
     )
@@ -98,3 +108,51 @@ def send_forward_email(
     except OSError as exc:
         raise RuntimeError(f"Resend request failed: {exc}") from exc
     logger.info("Forwarded alias email alias=%s to=%s", recipient_alias, recipient_email)
+
+
+def send_vmail_email(
+    *,
+    from_address: str,
+    to_address: str,
+    subject: str,
+    text: str,
+    idempotency_key: str,
+    in_reply_to: str | None = None,
+    references: str | None = None,
+) -> str:
+    if not _resend_enabled():
+        raise ResendProviderError("not_configured", temporary=True)
+
+    payload: dict[str, object] = {
+        "from": from_address,
+        "to": [to_address],
+        "subject": subject,
+        "text": text,
+    }
+    headers = {}
+    if in_reply_to:
+        headers["In-Reply-To"] = in_reply_to
+    if references:
+        headers["References"] = references
+    if headers:
+        payload["headers"] = headers
+
+    try:
+        response = _post_resend_email(payload, idempotency_key=idempotency_key)
+        try:
+            response_body = response.read()
+        finally:
+            response.close()
+        result = json.loads(response_body.decode("utf-8"))
+        resend_email_id = result.get("id") if isinstance(result, dict) else None
+        if not isinstance(resend_email_id, str) or not resend_email_id.strip():
+            raise ResendProviderError("invalid_response", temporary=True)
+        return resend_email_id.strip()
+    except ResendProviderError:
+        raise
+    except error.HTTPError as exc:
+        # Provider bodies can contain implementation details and are deliberately not propagated.
+        temporary = exc.code == 429 or exc.code >= 500
+        raise ResendProviderError(f"http_{exc.code}", temporary=temporary) from exc
+    except (error.URLError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResendProviderError("transport", temporary=True) from exc

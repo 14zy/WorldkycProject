@@ -13,6 +13,7 @@ class VMailMessage(Base):
     mailbox = Column(String, nullable=False)
     imap_uid = Column(String, nullable=False)
     message_id = Column(String, nullable=True, index=True)
+    references = Column(Text, nullable=True)
     recipient_alias = Column(String, nullable=False, index=True)
     telegramId = Column(BigInteger, nullable=True, index=True)
     userId = Column(String, nullable=True, index=True)

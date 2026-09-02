@@ -193,6 +193,7 @@ def _extract_inbox_content(message: Message):
     return {
         "from_header": from_header,
         "reply_to": _extract_reply_to(message, from_header),
+        "references": sanitize_mail_text(_decode_header_value(message.get("References"))) or None,
         "subject": subject,
         "body_text": body_text,
         "received_at": _parse_received_at(message),
@@ -336,6 +337,7 @@ async def _process_message(uid: str, message: Message):
                 mailbox=IMAP_MAILBOX,
                 imap_uid=uid,
                 message_id=message_id,
+                references=inbox_content["references"],
                 recipient_alias=alias,
                 telegram_id=delivery_telegram_id,
                 user_id=owner_user_id,
