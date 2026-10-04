@@ -31,7 +31,14 @@ class MailIngressTests(unittest.TestCase):
         message = EmailMessage()
         message["To"] = "VL10488@tonstealthid.com, vl10488@tonstealthid.com, second@example.com"
 
-        self.assertEqual(_extract_aliases(message), ["vl10488", "second"])
+        self.assertEqual(_extract_aliases(message), ["vl10488"])
+
+    def test_extract_aliases_ignores_unmanaged_domains(self):
+        message = EmailMessage()
+        message["To"] = "external@example.com"
+        message["X-Original-To"] = "Herve@tonstealthid.com"
+
+        self.assertEqual(_extract_aliases(message), ["herve"])
 
     def test_extract_aliases_combines_all_relevant_headers(self):
         message = EmailMessage()
@@ -89,6 +96,72 @@ class MailIngressTests(unittest.TestCase):
 
 
 class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_alias_with_two_vlinks_delivers_and_persists_once(self):
+        message = EmailMessage()
+        message["Message-ID"] = "<alias@example.com>"
+        message["To"] = "Herve@tonstealthid.com"
+        message.set_content("Body")
+        links = [
+            SimpleNamespace(reference="vl10776", telegramId=None, userId="user-1", status="Active"),
+            SimpleNamespace(reference="vl10999", telegramId=None, userId="user-1", status="Active"),
+        ]
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.list_active_by_mailbox_alias", return_value=links),
+            patch("services.mailService.worldKycAccountRepository.find_by_user_id", return_value=SimpleNamespace(emailAddress="owner@example.com")),
+            patch("services.mailService.telegramLinkRepository.list_active_for_user", return_value=[]),
+            patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_email,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()),
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
+        ):
+            await _process_message("alias-1", message)
+
+        deliver_email.assert_called_once_with(message, "herve", "owner@example.com")
+        upsert_vmail.assert_called_once()
+        self.assertEqual(upsert_vmail.call_args.kwargs["recipient_alias"], "herve")
+        self.assertEqual(upsert_vmail.call_args.kwargs["mailbox_type"], "alias")
+
+    async def test_unknown_alias_is_not_delivered(self):
+        message = EmailMessage()
+        message["To"] = "unknown@tonstealthid.com"
+        message.set_content("Body")
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.list_active_by_mailbox_alias", return_value=[]),
+            patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_email,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()) as mark_processed,
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
+        ):
+            await _process_message("unknown-1", message)
+
+        deliver_email.assert_not_called()
+        upsert_vmail.assert_not_called()
+        mark_processed.assert_not_called()
+
+    async def test_managed_primary_address_is_not_forwarded(self):
+        message = EmailMessage()
+        message["To"] = "herve@tonstealthid.com"
+        message.set_content("Body")
+        link = SimpleNamespace(reference="vl10776", telegramId=None, userId="user-1", status="Active")
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.list_active_by_mailbox_alias", return_value=[link]),
+            patch("services.mailService.worldKycAccountRepository.find_by_user_id", return_value=SimpleNamespace(emailAddress="herve@tonstealthid.com")),
+            patch("services.mailService.telegramLinkRepository.list_active_for_user", return_value=[]),
+            patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_email,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()),
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
+        ):
+            await _process_message("loop-1", message)
+
+        deliver_email.assert_not_called()
+        self.assertEqual(
+            upsert_vmail.call_args.kwargs["error"],
+            "Forwarding to the managed inbound domain is disabled",
+        )
     async def test_process_message_delivers_to_non_telegram_account_email_and_inbox(self):
         message = EmailMessage()
         message["Message-ID"] = "<msg-web@example.com>"

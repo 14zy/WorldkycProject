@@ -119,6 +119,28 @@ class VMailMessageRepositoryTests(unittest.TestCase):
         unread = vmailMessageRepository.list_for_aliases(["vl1"], unread_only=True)
         self.assertEqual(unread, [])
 
+    def test_list_for_user_cannot_read_another_accounts_alias_mail(self):
+        for uid, user_id in (("1", "user-1"), ("2", "user-2")):
+            vmailMessageRepository.upsert_from_processed_message(
+                mailbox="INBOX",
+                imap_uid=uid,
+                message_id=None,
+                recipient_alias="herve",
+                mailbox_type="alias",
+                telegram_id=None,
+                user_id=user_id,
+                from_header="sender@example.com",
+                reply_to=None,
+                subject=user_id,
+                body_text="Body",
+                delivery_status="delivered",
+            )
+
+        messages = vmailMessageRepository.list_for_user("user-1", mailboxes=["HERVE"])
+
+        self.assertEqual([message.subject for message in messages], ["user-1"])
+        self.assertEqual(messages[0].mailbox_type, "alias")
+
 
 if __name__ == "__main__":
     unittest.main()

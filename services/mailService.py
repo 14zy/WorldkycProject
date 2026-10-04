@@ -23,6 +23,7 @@ from config.config import (
     IMAP_PORT,
     IMAP_USE_SSL,
     IMAP_USERNAME,
+    MAIL_INBOUND_DOMAINS,
     bot,
 )
 from services.outboundMailService import send_forward_email
@@ -84,14 +85,13 @@ def _fetch_unseen_messages():
 def _extract_aliases(message: Message) -> list[str]:
     aliases: list[str] = []
     for header_name in RECIPIENT_HEADERS:
-        header_value = message.get(header_name)
-        if not header_value:
-            continue
-        for _display_name, address in getaddresses([header_value]):
-            local_part = address.partition("@")[0].strip()
-            if local_part:
-                normalized = local_part.casefold()
-                if normalized not in aliases:
+        for header_value in message.get_all(header_name, []):
+            for _display_name, address in getaddresses([header_value]):
+                local_part, separator, domain = address.rpartition("@")
+                if not separator or domain.strip().casefold() not in MAIL_INBOUND_DOMAINS:
+                    continue
+                normalized = local_part.strip().casefold()
+                if normalized and normalized not in aliases:
                     aliases.append(normalized)
     return aliases
 
@@ -239,6 +239,22 @@ def _merge_status(current_status: str | None, next_status: str) -> str:
     return current_status
 
 
+def _is_direct_link_routable(link) -> bool:
+    status = (getattr(link, "status", None) or "").strip().casefold()
+    return not status or status == "active"
+
+
+def _is_managed_forwarding_address(address: str | None) -> bool:
+    if not address:
+        return False
+    parsed = getaddresses([address])
+    if len(parsed) != 1:
+        return False
+    _name, addr_spec = parsed[0]
+    _local, separator, domain = addr_spec.rpartition("@")
+    return bool(separator and domain.strip().casefold() in MAIL_INBOUND_DOMAINS)
+
+
 async def _process_message(uid: str, message: Message):
     if processedEmailRepository.get_by_mailbox_uid(IMAP_MAILBOX, uid):
         return
@@ -251,30 +267,38 @@ async def _process_message(uid: str, message: Message):
         return
 
     resolved_any = False
-    resolved_deliveries = []
-    target_deliveries: dict[str, tuple[str, object]] = {}
+    resolved_deliveries: list[tuple[str, str, object]] = []
+    target_deliveries: dict[str, tuple[str, str, object]] = {}
     unmatched_aliases: list[str] = []
     aggregate_status: str | None = None
     aggregate_alias: str | None = None
     aggregate_errors: list[str] = []
     for alias in effective_aliases:
         verified_link = verifiedLinkRepository.find_by_reference(alias)
-        if not verified_link:
+        mailbox_type = "vlink"
+        if not verified_link or not _is_direct_link_routable(verified_link):
+            alias_links = verifiedLinkRepository.list_active_by_mailbox_alias(alias)
+            if alias_links:
+                verified_link = alias_links[0]
+                mailbox_type = "alias"
+            else:
+                verified_link = None
+        if verified_link is None:
             unmatched_aliases.append(alias)
             continue
-        resolved_deliveries.append((alias, verified_link))
+        resolved_deliveries.append((alias, mailbox_type, verified_link))
         owner_user_id = getattr(verified_link, "userId", None)
         owner_key = f"user:{owner_user_id}" if owner_user_id else f"telegram:{verified_link.telegramId}"
-        target_deliveries.setdefault(owner_key, (alias, verified_link))
+        target_deliveries.setdefault(owner_key, (alias, mailbox_type, verified_link))
 
     delivery_results: dict[str, tuple[str, str | None, int | None]] = {}
-    for owner_key, (alias, verified_link) in target_deliveries.items():
+    for owner_key, (alias, _mailbox_type, verified_link) in target_deliveries.items():
         owner_user_id = getattr(verified_link, "userId", None)
         account = worldKycAccountRepository.find_by_user_id(owner_user_id) if owner_user_id else None
         active_telegram_links = (
             telegramLinkRepository.list_active_for_user(owner_user_id) if owner_user_id else []
         )
-        telegram_ids = [link.telegramId for link in active_telegram_links]
+        telegram_ids = list(dict.fromkeys(link.telegramId for link in active_telegram_links))
         legacy_telegram_id = getattr(verified_link, "telegramId", None)
         if not telegram_ids and legacy_telegram_id is not None:
             telegram_ids = [legacy_telegram_id]
@@ -300,7 +324,7 @@ async def _process_message(uid: str, message: Message):
             getattr(account, "emailAddress", None)
             or getattr(legacy_user, "emailAddress", None)
         )
-        if email_address:
+        if email_address and not _is_managed_forwarding_address(email_address):
             try:
                 _deliver_to_user_email(message, alias, email_address)
                 status = STATUS_DELIVERED
@@ -316,6 +340,16 @@ async def _process_message(uid: str, message: Message):
                     email_address,
                     exc,
                 )
+        elif email_address:
+            error = "Forwarding to the managed inbound domain is disabled"
+            logger.warning(
+                "Skipping forwarding loop uid=%s message_id=%s alias=%s userId=%s email=%s",
+                uid,
+                message_id,
+                alias,
+                owner_user_id,
+                email_address,
+            )
         else:
             error = "User email address not available" if telegram_delivered else "No delivery channel available"
 
@@ -326,7 +360,7 @@ async def _process_message(uid: str, message: Message):
 
     if resolved_any:
         inbox_content = _extract_inbox_content(message)
-        for alias, verified_link in resolved_deliveries:
+        for alias, mailbox_type, verified_link in resolved_deliveries:
             owner_user_id = getattr(verified_link, "userId", None)
             owner_key = f"user:{owner_user_id}" if owner_user_id else f"telegram:{verified_link.telegramId}"
             status, error, delivery_telegram_id = delivery_results.get(
@@ -339,6 +373,7 @@ async def _process_message(uid: str, message: Message):
                 message_id=message_id,
                 references=inbox_content["references"],
                 recipient_alias=alias,
+                mailbox_type=mailbox_type,
                 telegram_id=delivery_telegram_id,
                 user_id=owner_user_id,
                 from_header=inbox_content["from_header"],
@@ -386,16 +421,8 @@ async def poll_loop():
             for uid, message in messages:
                 try:
                     await _process_message(uid, message)
-                except Exception as exc:
+                except Exception:
                     logger.exception("IMAP message processing failed uid=%s", uid)
-                    processedEmailRepository.mark_processed(
-                        IMAP_MAILBOX,
-                        uid,
-                        message_id=message.get("Message-ID"),
-                        recipient_alias=None,
-                        status="error",
-                        error=str(exc),
-                    )
         except Exception:
             logger.exception("IMAP poll loop failed")
 

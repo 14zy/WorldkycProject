@@ -80,6 +80,23 @@ RESEND_BASE_URL = os.getenv("RESEND_BASE_URL", "https://api.resend.com").rstrip(
 RESEND_TIMEOUT_SECONDS = _get_int_env("RESEND_TIMEOUT_SECONDS", 15)
 RESEND_WEBHOOK_SECRET = os.getenv("RESEND_WEBHOOK_SECRET")
 MAIL_FROM_DOMAIN = os.getenv("MAIL_FROM_DOMAIN", "tonstealthid.com").strip()
+MAIL_INBOUND_DOMAINS = tuple(
+    dict.fromkeys(
+        domain.strip().casefold()
+        for domain in os.getenv("MAIL_INBOUND_DOMAINS", MAIL_FROM_DOMAIN).split(",")
+        if domain.strip()
+    )
+)
+VMAIL_RESERVED_LOCAL_PARTS = tuple(
+    dict.fromkeys(
+        local_part.strip().casefold()
+        for local_part in os.getenv(
+            "VMAIL_RESERVED_LOCAL_PARTS",
+            "postmaster,abuse,admin",
+        ).split(",")
+        if local_part.strip()
+    )
+)
 VMAIL_ACCOUNT_SEND_LIMIT_PER_HOUR = _get_int_env("VMAIL_ACCOUNT_SEND_LIMIT_PER_HOUR", 30)
 VMAIL_LINK_SEND_LIMIT_PER_HOUR = _get_int_env("VMAIL_LINK_SEND_LIMIT_PER_HOUR", 10)
 

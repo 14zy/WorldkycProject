@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint, text
 
 from config.dbConfig import Base
 
@@ -15,6 +15,7 @@ class VMailMessage(Base):
     message_id = Column(String, nullable=True, index=True)
     references = Column(Text, nullable=True)
     recipient_alias = Column(String, nullable=False, index=True)
+    mailbox_type = Column(String(16), nullable=False, server_default=text("'vlink'"), default="vlink")
     telegramId = Column(BigInteger, nullable=True, index=True)
     userId = Column(String, nullable=True, index=True)
     from_header = Column(String, nullable=False)
