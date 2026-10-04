@@ -34,6 +34,7 @@ def upsert_from_processed_message(
     message_id: str | None,
     references: str | None = None,
     recipient_alias: str,
+    mailbox_type: str = "vlink",
     telegram_id: int | None,
     user_id: str | None,
     from_header: str,
@@ -47,6 +48,9 @@ def upsert_from_processed_message(
     normalized_alias = (recipient_alias or "").strip().casefold()
     if not normalized_alias:
         raise ValueError("recipient_alias is required")
+    normalized_mailbox_type = (mailbox_type or "").strip().casefold()
+    if normalized_mailbox_type not in {"alias", "vlink"}:
+        raise ValueError("mailbox_type must be alias or vlink")
 
     db = SessionLocal()
     try:
@@ -65,6 +69,7 @@ def upsert_from_processed_message(
 
         message.message_id = message_id
         message.references = references
+        message.mailbox_type = normalized_mailbox_type
         message.telegramId = telegram_id
         message.userId = user_id
         message.from_header = from_header
@@ -105,6 +110,32 @@ def list_for_aliases(
     db = SessionLocal()
     try:
         query = db.query(VMailMessage).filter(VMailMessage.recipient_alias.in_(normalized_aliases))
+        if unread_only:
+            query = query.filter(VMailMessage.is_read.is_(False))
+        return (
+            query.order_by(VMailMessage.receivedAt.desc().nullslast(), VMailMessage.processedAt.desc())
+            .offset(max(0, offset))
+            .limit(max(1, limit))
+            .all()
+        )
+    finally:
+        db.close()
+
+
+def list_for_user(
+    user_id: str,
+    *,
+    mailboxes: list[str] | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    unread_only: bool = False,
+):
+    normalized_mailboxes = _normalize_aliases(mailboxes or [])
+    db = SessionLocal()
+    try:
+        query = db.query(VMailMessage).filter(VMailMessage.userId == user_id)
+        if normalized_mailboxes:
+            query = query.filter(VMailMessage.recipient_alias.in_(normalized_mailboxes))
         if unread_only:
             query = query.filter(VMailMessage.is_read.is_(False))
         return (

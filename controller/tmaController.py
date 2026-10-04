@@ -142,6 +142,8 @@ def _serialize_vmail_message(message):
     received_at = getattr(message, "receivedAt", None) or getattr(message, "processedAt", None)
     return {
         "id": message.id,
+        "mailbox": message.recipient_alias,
+        "mailboxType": getattr(message, "mailbox_type", None) or "vlink",
         "reference": message.recipient_alias,
         "from": message.from_header,
         "replyTo": message.reply_to,
@@ -216,6 +218,7 @@ def _serialize_stored_vlink(link):
         "reference": link.reference,
         "name": link.name or "Unnamed",
         "status": link.status or "Unknown",
+        "mailboxAlias": getattr(link, "mailboxAlias", None),
         "url": f"{WKYC_VLINK_BASE_URL}{link.reference}",
     }
 
@@ -368,19 +371,16 @@ async def handle_vmail_messages(request: web.Request):
     if link is None or account is None:
         return _json_error("User is not linked", 404)
 
-    requested_references = _split_references(request.query.get("references"))
-    if requested_references:
-        links = verifiedLinkRepository.list_for_account_references(account.userId, requested_references)
-    else:
-        links = verifiedLinkRepository.list_for_account(account.userId)
-
-    references = [link.reference for link in links]
+    requested_mailboxes = _split_references(request.query.get("mailboxes"))
+    if not requested_mailboxes:
+        requested_mailboxes = _split_references(request.query.get("references"))
     limit = _parse_int_query(request, "limit", 25, 1, 100)
     offset = _parse_int_query(request, "offset", 0, 0, 10000)
     unread_only = _parse_bool_query(request, "unreadOnly")
 
-    messages = vmailMessageRepository.list_for_aliases(
-        references,
+    messages = vmailMessageRepository.list_for_user(
+        account.userId,
+        mailboxes=requested_mailboxes,
         limit=limit,
         offset=offset,
         unread_only=unread_only,

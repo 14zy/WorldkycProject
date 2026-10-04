@@ -236,26 +236,23 @@ async def handle_vlink_sync(request: web.Request):
     if email_address is not None and not isinstance(email_address, str):
         return _json_error("Assertion email claim must be a string", 400)
     worldKycAccountRepository.upsert(assertion.user_id, email_address)
-    references = verifiedLinkRepository.upsert_links_for_user(assertion.user_id, items)
-    verifiedLinkRepository.delete_missing_links_for_account(assertion.user_id, references)
+    _references, warnings = verifiedLinkRepository.sync_links_for_user(assertion.user_id, items)
     links = verifiedLinkRepository.list_for_account(assertion.user_id)
-    return web.json_response({"items": [_serialize_stored_vlink(link) for link in links]})
+    return web.json_response({
+        "items": [_serialize_stored_vlink(link) for link in links],
+        "warnings": warnings,
+    })
 
 
 async def handle_vmail_messages(request: web.Request):
     assertion = _assertion_from_request(request, "vmail.read")
     _require_account(assertion.user_id)
-    requested_references = _split_references(request.query.get("references"))
-    if requested_references:
-        links = verifiedLinkRepository.list_for_account_references(
-            assertion.user_id,
-            requested_references,
-        )
-    else:
-        links = verifiedLinkRepository.list_for_account(assertion.user_id)
-
-    messages = vmailMessageRepository.list_for_aliases(
-        [link.reference for link in links],
+    requested_mailboxes = _split_references(request.query.get("mailboxes"))
+    if not requested_mailboxes:
+        requested_mailboxes = _split_references(request.query.get("references"))
+    messages = vmailMessageRepository.list_for_user(
+        assertion.user_id,
+        mailboxes=requested_mailboxes,
         limit=_parse_int_query(request, "limit", 25, 1, 100),
         offset=_parse_int_query(request, "offset", 0, 0, 10000),
         unread_only=_parse_bool_query(request, "unreadOnly"),

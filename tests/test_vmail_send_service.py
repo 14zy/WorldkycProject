@@ -22,7 +22,7 @@ class VmailDerivationTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(VmailSendError):
                 validate_client_request_id({"clientRequestId": value})
 
-    @patch("services.vmailSendService.verifiedLinkRepository.list_for_account_references")
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
     def test_compose_normalizes_reference_and_validates_single_recipient(self, list_links: Mock):
         list_links.return_value = [SimpleNamespace(reference="vl10776", status="Active")]
 
@@ -41,9 +41,40 @@ class VmailDerivationTests(unittest.TestCase):
         self.assertEqual(message.to_address, "recipient@example.com")
         self.assertEqual(message.subject, "Hello")
         self.assertEqual(message.text, "Body")
-        list_links.assert_called_once_with("user-1", ["vl10776"])
+        list_links.assert_called_once_with("user-1", "vl10776")
 
-    @patch("services.vmailSendService.verifiedLinkRepository.list_for_account_references", return_value=[])
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
+    def test_compose_accepts_alias_mailbox_and_legacy_matching_reference(self, list_links: Mock):
+        list_links.return_value = [SimpleNamespace(reference="vl1", status="Active")]
+
+        message = derive_compose(
+            "user-1",
+            {
+                "mailbox": " Herve ",
+                "reference": "herve",
+                "to": "recipient@example.com",
+                "subject": "Hello",
+                "text": "Body",
+            },
+        )
+
+        self.assertEqual(message.reference, "herve")
+        list_links.assert_called_once_with("user-1", "herve")
+
+    def test_compose_rejects_mismatched_mailbox_and_reference(self):
+        with self.assertRaises(VmailSendError):
+            derive_compose(
+                "user-1",
+                {
+                    "mailbox": "herve",
+                    "reference": "vl1",
+                    "to": "recipient@example.com",
+                    "subject": "Hello",
+                    "text": "Body",
+                },
+            )
+
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox", return_value=[])
     def test_compose_hides_missing_or_foreign_link(self, _list_links: Mock):
         with self.assertRaises(VmailNotFoundError):
             derive_compose(
@@ -51,7 +82,7 @@ class VmailDerivationTests(unittest.TestCase):
                 {"reference": "vl2", "to": "a@example.com", "subject": "Hi", "text": "Body"},
             )
 
-    @patch("services.vmailSendService.verifiedLinkRepository.list_for_account_references")
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
     def test_compose_rejects_multiple_recipients_and_header_injection(self, list_links: Mock):
         list_links.return_value = [SimpleNamespace(status="Active")]
         for recipient in ("a@example.com, b@example.com", "a@example.com\r\nBcc: b@example.com"):
@@ -61,7 +92,7 @@ class VmailDerivationTests(unittest.TestCase):
                     {"reference": "vl1", "to": recipient, "subject": "Hi", "text": "Body"},
                 )
 
-    @patch("services.vmailSendService.verifiedLinkRepository.list_for_account_references")
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
     @patch("services.vmailSendService.outboundRepository.find_owned_inbound")
     def test_reply_derives_destination_subject_and_thread_headers(self, find_message: Mock, list_links: Mock):
         find_message.return_value = SimpleNamespace(
@@ -85,7 +116,7 @@ class VmailDerivationTests(unittest.TestCase):
             "<first@example.com> <second@example.com> <current@example.com>",
         )
 
-    @patch("services.vmailSendService.verifiedLinkRepository.list_for_account_references")
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
     @patch("services.vmailSendService.outboundRepository.find_owned_inbound")
     def test_reply_rejects_unsafe_stored_headers(self, find_message: Mock, list_links: Mock):
         find_message.return_value = SimpleNamespace(

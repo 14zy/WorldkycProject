@@ -8,6 +8,7 @@ class OutboundVmailMessage(Base):
     __tablename__ = "outbound_vmail_messages"
     __table_args__ = (
         UniqueConstraint("userId", "client_request_id", name="uq_outbound_vmail_user_request"),
+        UniqueConstraint("resend_email_id", name="uq_outbound_vmail_resend_email_id"),
     )
 
     id = Column(String(32), primary_key=True)
@@ -27,7 +28,7 @@ class OutboundVmailMessage(Base):
     body_text = Column(Text, nullable=False)
     in_reply_to = Column(String, nullable=True)
     references = Column(Text, nullable=True)
-    resend_email_id = Column(String, nullable=True, unique=True, index=True)
+    resend_email_id = Column(String, nullable=True, index=True)
     rfc_message_id = Column(String, nullable=True)
     status = Column(String(32), nullable=False, index=True)
     createdAt = Column(DateTime(timezone=True), nullable=False, index=True)

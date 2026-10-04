@@ -18,7 +18,7 @@ from services.outboundMailService import ResendProviderError, send_vmail_email
 
 
 CLIENT_REQUEST_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-REFERENCE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+REFERENCE_RE = verifiedLinkRepository.MAILBOX_LOCAL_PART_RE
 MESSAGE_ID_RE = re.compile(r"^<[^<>\s@]+@[^<>\s@]+>$")
 MESSAGE_ID_SEARCH_RE = re.compile(r"<[^<>\s@]+@[^<>\s@]+>")
 
@@ -99,18 +99,35 @@ def _parse_mailbox(value: str, *, allow_display_name: bool) -> str:
     return address.addr_spec
 
 
-def _active_owned_link(user_id: str, reference: str):
-    links = verifiedLinkRepository.list_for_account_references(user_id, [reference])
-    if len(links) != 1 or (links[0].status or "").strip().casefold() != "active":
+def _active_owned_mailbox(user_id: str, mailbox: str):
+    links = verifiedLinkRepository.list_active_for_account_mailbox(user_id, mailbox)
+    if not links:
         raise VmailNotFoundError("VMail resource not found")
-    return links[0]
+    return links
+
+
+def _compose_mailbox(payload: dict) -> str:
+    mailbox = payload.get("mailbox")
+    reference = payload.get("reference")
+    if mailbox is None:
+        mailbox = reference
+    elif reference is not None:
+        if (
+            not isinstance(mailbox, str)
+            or not isinstance(reference, str)
+            or mailbox.strip().casefold() != reference.strip().casefold()
+        ):
+            raise VmailSendError("mailbox and reference must match")
+    if not isinstance(mailbox, str):
+        raise VmailSendError("mailbox is required")
+    return mailbox.strip().casefold()
 
 
 def derive_compose(user_id: str, payload: dict) -> DerivedMessage:
-    reference = _required_string(payload, "reference").strip().casefold()
+    reference = _compose_mailbox(payload)
     if not reference or not REFERENCE_RE.fullmatch(reference):
-        raise VmailSendError("reference is invalid")
-    _active_owned_link(user_id, reference)
+        raise VmailSendError("mailbox is invalid")
+    _active_owned_mailbox(user_id, reference)
     try:
         to_address = _parse_mailbox(_required_string(payload, "to"), allow_display_name=False)
     except ValueError as exc:
@@ -137,7 +154,7 @@ def derive_reply(user_id: str, message_id: int, payload: dict) -> DerivedMessage
     reference = (original.recipient_alias or "").strip().casefold()
     if not REFERENCE_RE.fullmatch(reference):
         raise VmailNotFoundError("VMail resource not found")
-    _active_owned_link(user_id, reference)
+    _active_owned_mailbox(user_id, reference)
     to_address = None
     for destination in (original.reply_to, original.from_header):
         if not destination:
