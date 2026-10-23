@@ -25,13 +25,14 @@ def _resend_enabled() -> bool:
 def build_forward_email(
     *,
     recipient_alias: str,
+    recipient_domain: str = MAIL_FROM_DOMAIN,
     recipient_email: str,
     sender_header: str,
     subject: str,
     body: str,
 ) -> EmailMessage:
     message = EmailMessage()
-    message["From"] = f"{recipient_alias.upper()}@{MAIL_FROM_DOMAIN}"
+    message["From"] = f"{recipient_alias.upper()}@{recipient_domain}"
     message["To"] = recipient_email
     message["Subject"] = subject
     if sender_header:
@@ -78,6 +79,7 @@ def _post_resend_email(payload: dict[str, object], *, idempotency_key: str | Non
 def send_forward_email(
     *,
     recipient_alias: str,
+    recipient_domain: str = MAIL_FROM_DOMAIN,
     recipient_email: str,
     sender_header: str,
     subject: str,
@@ -88,6 +90,7 @@ def send_forward_email(
 
     message = build_forward_email(
         recipient_alias=recipient_alias,
+        recipient_domain=recipient_domain,
         recipient_email=recipient_email,
         sender_header=sender_header,
         subject=subject,

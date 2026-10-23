@@ -11,6 +11,7 @@ from services.mailService import (
     _build_plain_forward_content,
     _build_telegram_message,
     _extract_aliases,
+    _extract_recipients,
     _process_message,
     _select_effective_aliases,
 )
@@ -47,6 +48,15 @@ class MailIngressTests(unittest.TestCase):
         message["Delivered-To"] = "VL10488@tonstealthid.com"
 
         self.assertEqual(_extract_aliases(message), ["vl10157", "vl10158", "vl10488"])
+
+    def test_extract_recipients_keeps_same_local_part_on_both_domains(self):
+        message = EmailMessage()
+        message["To"] = "Alice@tonstealthid.com, alice@tcore.ca"
+
+        self.assertEqual(
+            [(recipient.alias, recipient.domain) for recipient in _extract_recipients(message)],
+            [("alice", "tonstealthid.com"), ("alice", "tcore.ca")],
+        )
 
     def test_select_effective_aliases_prefers_target_alias_over_system_mailbox(self):
         self.assertEqual(_select_effective_aliases(["vl10776", "vl10488"]), ["vl10776"])
@@ -96,6 +106,29 @@ class MailIngressTests(unittest.TestCase):
 
 
 class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tcore_recipient_routes_and_forwards_with_tcore_identity(self):
+        message = EmailMessage()
+        message["Message-ID"] = "<tcore@example.com>"
+        message["To"] = "Alice@tcore.ca"
+        message.set_content("Body")
+        link = SimpleNamespace(reference="vl1", telegramId=None, userId="user-1", status="Active")
+        with (
+            patch("services.mailService.processedEmailRepository.get_by_mailbox_uid", return_value=None),
+            patch("services.mailService.verifiedLinkRepository.find_by_reference", return_value=None) as find_direct,
+            patch("services.mailService.verifiedLinkRepository.list_active_by_mailbox_alias", return_value=[link]) as find_alias,
+            patch("services.mailService.worldKycAccountRepository.find_by_user_id", return_value=SimpleNamespace(emailAddress="owner@example.com")),
+            patch("services.mailService.telegramLinkRepository.list_active_for_user", return_value=[]),
+            patch("services.mailService._deliver_to_user_email", new=Mock()) as deliver_email,
+            patch("services.mailService.processedEmailRepository.mark_processed", new=Mock()),
+            patch("services.mailService.vmailMessageRepository.upsert_from_processed_message", new=Mock()) as upsert_vmail,
+        ):
+            await _process_message("tcore-1", message)
+
+        find_direct.assert_called_once_with("alice", "tcore.ca")
+        find_alias.assert_called_once_with("alice", "tcore.ca")
+        deliver_email.assert_called_once_with(message, "alice", "tcore.ca", "owner@example.com")
+        self.assertEqual(upsert_vmail.call_args.kwargs["recipient_domain"], "tcore.ca")
+
     async def test_alias_with_two_vlinks_delivers_and_persists_once(self):
         message = EmailMessage()
         message["Message-ID"] = "<alias@example.com>"
@@ -117,9 +150,10 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
         ):
             await _process_message("alias-1", message)
 
-        deliver_email.assert_called_once_with(message, "herve", "owner@example.com")
+        deliver_email.assert_called_once_with(message, "herve", "tonstealthid.com", "owner@example.com")
         upsert_vmail.assert_called_once()
         self.assertEqual(upsert_vmail.call_args.kwargs["recipient_alias"], "herve")
+        self.assertEqual(upsert_vmail.call_args.kwargs["recipient_domain"], "tonstealthid.com")
         self.assertEqual(upsert_vmail.call_args.kwargs["mailbox_type"], "alias")
 
     async def test_unknown_alias_is_not_delivered(self):
@@ -183,7 +217,7 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
             await _process_message("web-1", message)
 
         deliver_to_telegram.assert_not_awaited()
-        deliver_to_user_email.assert_called_once_with(message, "vlweb", "web-user@example.com")
+        deliver_to_user_email.assert_called_once_with(message, "vlweb", "tonstealthid.com", "web-user@example.com")
         self.assertEqual(upsert_vmail.call_args.kwargs["user_id"], "wk-web-user")
         self.assertIsNone(upsert_vmail.call_args.kwargs["telegram_id"])
         self.assertEqual(upsert_vmail.call_args.kwargs["delivery_status"], STATUS_DELIVERED)
@@ -208,9 +242,9 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
         ):
             await _process_message("123", message)
 
-        find_by_reference.assert_called_once_with("vl10776")
+        find_by_reference.assert_called_once_with("vl10776", "tonstealthid.com")
         deliver_to_telegram.assert_awaited_once()
-        deliver_to_user_email.assert_called_once_with(message, "vl10776", "user@example.com")
+        deliver_to_user_email.assert_called_once_with(message, "vl10776", "tonstealthid.com", "user@example.com")
         self.assertEqual(deliver_to_telegram.await_args.args[0], 10776)
         upsert_vmail.assert_called_once()
         self.assertEqual(upsert_vmail.call_args.kwargs["recipient_alias"], "vl10776")
@@ -280,10 +314,10 @@ class MailIngressProcessMessageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             find_by_reference.call_args_list,
-            [call("vl10776"), call("vl10777")],
+            [call("vl10776", "tonstealthid.com"), call("vl10777", "tonstealthid.com")],
         )
         self.assertEqual([args.args[0] for args in deliver_to_telegram.await_args_list], [10776])
-        deliver_to_user_email.assert_called_once_with(message, "vl10776", "user@example.com")
+        deliver_to_user_email.assert_called_once_with(message, "vl10776", "tonstealthid.com", "user@example.com")
         self.assertEqual(
             [call_args.kwargs["recipient_alias"] for call_args in upsert_vmail.call_args_list],
             ["vl10776", "vl10777"],

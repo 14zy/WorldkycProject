@@ -113,6 +113,68 @@ class VerifiedLinkRepositoryTests(unittest.TestCase):
         self.assertEqual([link.userId for link in verifiedLinkRepository.list_active_by_mailbox_alias("herve")], ["user-1"])
         self.assertIsNone(verifiedLinkRepository.list_for_account("user-2")[0].mailboxAlias)
 
+    def test_same_alias_is_independent_across_domains(self):
+        verifiedLinkRepository.sync_links_for_user(
+            "user-1",
+            [{
+                "verifiedLinkReference": "vl1",
+                "verifiedLinkStatusTypeName": "Active",
+                "mailboxAlias": "alice",
+                "mailboxDomain": "tonstealthid.com",
+            }],
+        )
+        _references, warnings = verifiedLinkRepository.sync_links_for_user(
+            "user-2",
+            [{
+                "verifiedLinkReference": "vl2",
+                "verifiedLinkStatusTypeName": "Active",
+                "mailboxAlias": "alice",
+                "mailboxDomain": "tcore.ca",
+            }],
+        )
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            [link.userId for link in verifiedLinkRepository.list_active_by_mailbox_alias("alice", "tonstealthid.com")],
+            ["user-1"],
+        )
+        self.assertEqual(
+            [link.userId for link in verifiedLinkRepository.list_active_by_mailbox_alias("alice", "tcore.ca")],
+            ["user-2"],
+        )
+
+    def test_sync_rejects_unsupported_domain_and_uses_default(self):
+        _references, warnings = verifiedLinkRepository.sync_links_for_user(
+            "user-1",
+            [{
+                "verifiedLinkReference": "vl1",
+                "verifiedLinkStatusTypeName": "Active",
+                "mailboxDomain": "example.com",
+            }],
+        )
+
+        self.assertEqual(warnings[0]["reason"], "unsupported_domain")
+        self.assertEqual(verifiedLinkRepository.list_for_account("user-1")[0].mailboxDomain, "tonstealthid.com")
+
+    def test_legacy_sync_without_domain_preserves_existing_assignment(self):
+        verifiedLinkRepository.sync_links_for_user(
+            "user-1",
+            [{
+                "verifiedLinkReference": "vl1",
+                "verifiedLinkStatusTypeName": "Active",
+                "mailboxDomain": "tcore.ca",
+            }],
+        )
+        verifiedLinkRepository.sync_links_for_user(
+            "user-1",
+            [{
+                "verifiedLinkReference": "vl1",
+                "verifiedLinkStatusTypeName": "Active",
+            }],
+        )
+
+        self.assertEqual(verifiedLinkRepository.list_for_account("user-1")[0].mailboxDomain, "tcore.ca")
+
     def test_removed_reference_can_become_alias_in_same_atomic_sync(self):
         verifiedLinkRepository.sync_links_for_user(
             "user-1",

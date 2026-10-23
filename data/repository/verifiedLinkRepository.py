@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from config.config import IMAP_USERNAME, VMAIL_RESERVED_LOCAL_PARTS
+from config.config import IMAP_USERNAME, MAIL_FROM_DOMAIN, MAIL_INBOUND_DOMAINS, VMAIL_RESERVED_LOCAL_PARTS
 from config.dbConfig import SessionLocal
 from data.model.verifiedLink import VerifiedLink
 
@@ -36,6 +36,11 @@ def normalize_mailbox_alias(value) -> str | None:
     return normalized
 
 
+def normalize_mailbox_domain(value) -> str | None:
+    normalized = value.strip().casefold().removeprefix("@").rstrip(".") if isinstance(value, str) else ""
+    return normalized if normalized in MAIL_INBOUND_DOMAINS else None
+
+
 def _mailbox_alias_from_link(link: dict) -> str | None:
     for key in ("mailboxAlias", "selectedAccountAlias", "SelectedAccountAlias"):
         if key in link:
@@ -53,8 +58,13 @@ def sync_links_for_user(user_id: str, links: list[dict], telegram_id: int | None
     warnings: list[dict[str, str]] = []
     try:
         now = _utcnow()
-        normalized_items: dict[str, tuple[dict, str | None]] = {}
+        normalized_items: dict[str, tuple[dict, str | None, str]] = {}
         incoming_references: set[str] = set()
+        existing_domains = dict(
+            db.query(VerifiedLink.reference, VerifiedLink.mailboxDomain)
+            .filter(VerifiedLink.userId == user_id)
+            .all()
+        )
         for link in links:
             reference = _link_reference(link)
             if not reference or not MAILBOX_LOCAL_PART_RE.fullmatch(reference):
@@ -65,35 +75,53 @@ def sync_links_for_user(user_id: str, links: list[dict], telegram_id: int | None
                 None,
             )
             alias = _mailbox_alias_from_link(link)
+            raw_domain = link.get("mailboxDomain") or link.get("domainAlias") or link.get("DomainAlias")
+            domain = normalize_mailbox_domain(raw_domain)
             if normalize_mailbox(raw_alias) and alias is None:
                 warnings.append({"reference": reference, "mailboxAlias": normalize_mailbox(raw_alias), "reason": "invalid_or_reserved"})
-            normalized_items[reference] = (link, alias)
+            if normalize_mailbox(raw_domain) and domain is None:
+                warnings.append({"reference": reference, "mailboxDomain": normalize_mailbox(raw_domain), "reason": "unsupported_domain"})
+            normalized_items[reference] = (
+                link,
+                alias,
+                domain or existing_domains.get(reference) or MAIL_FROM_DOMAIN,
+            )
 
         # References omitted from this account's snapshot are deleted below and
         # must not temporarily block an alias taking over that namespace.
-        all_references = {
-            reference
-            for reference, owner in db.query(VerifiedLink.reference, VerifiedLink.userId).all()
+        reference_domains = {
+            (reference, domain or MAIL_FROM_DOMAIN)
+            for reference, domain, owner in db.query(
+                VerifiedLink.reference,
+                VerifiedLink.mailboxDomain,
+                VerifiedLink.userId,
+            ).all()
             if owner != user_id or reference in incoming_references
-        } | incoming_references
-        requested_aliases = {alias for _, alias in normalized_items.values() if alias}
-        foreign_alias_owners: dict[str, set[str]] = {}
+        } | {
+            (reference, domain)
+            for reference, (_link, _alias, domain) in normalized_items.items()
+        }
+        requested_aliases = {(alias, domain) for _, alias, domain in normalized_items.values() if alias}
+        foreign_alias_owners: dict[tuple[str, str], set[str]] = {}
         if requested_aliases:
-            for alias, owner in (
-                db.query(VerifiedLink.mailboxAlias, VerifiedLink.userId)
+            alias_names = {alias for alias, _domain in requested_aliases}
+            domains = {domain for _alias, domain in requested_aliases}
+            for alias, domain, owner in (
+                db.query(VerifiedLink.mailboxAlias, VerifiedLink.mailboxDomain, VerifiedLink.userId)
                 .filter(
-                    VerifiedLink.mailboxAlias.in_(requested_aliases),
+                    VerifiedLink.mailboxAlias.in_(alias_names),
+                    VerifiedLink.mailboxDomain.in_(domains),
                     VerifiedLink.userId != user_id,
                 )
                 .all()
             ):
-                foreign_alias_owners.setdefault(alias, set()).add(owner)
+                foreign_alias_owners.setdefault((alias, domain), set()).add(owner)
 
-        for reference, (link, alias) in normalized_items.items():
-            if alias and alias in all_references:
+        for reference, (link, alias, domain) in normalized_items.items():
+            if alias and (alias, domain) in reference_domains:
                 warnings.append({"reference": reference, "mailboxAlias": alias, "reason": "vlink_reference_collision"})
                 alias = None
-            elif alias and alias in foreign_alias_owners:
+            elif alias and (alias, domain) in foreign_alias_owners:
                 warnings.append({"reference": reference, "mailboxAlias": alias, "reason": "cross_account_collision"})
                 alias = None
 
@@ -110,6 +138,7 @@ def sync_links_for_user(user_id: str, links: list[dict], telegram_id: int | None
             existing.name = link.get("verifiedLinkName") or link.get("name")
             existing.status = link.get("verifiedLinkStatusTypeName") or link.get("statusTypeName") or link.get("status")
             existing.mailboxAlias = alias
+            existing.mailboxDomain = domain
             existing.updatedAt = now
 
         delete_query = db.query(VerifiedLink).filter(VerifiedLink.userId == user_id)
@@ -148,32 +177,48 @@ def delete_missing_links_for_account(user_id: str, references: set[str]):
         db.close()
 
 
-def find_by_reference(reference: str):
+def find_by_reference(reference: str, domain: str | None = None):
     normalized_reference = normalize_mailbox(reference)
     if not normalized_reference:
         return None
     db = SessionLocal()
     try:
-        return db.query(VerifiedLink).filter(VerifiedLink.reference == normalized_reference).first()
+        query = db.query(VerifiedLink).filter(VerifiedLink.reference == normalized_reference)
+        if domain is not None:
+            normalized_domain = normalize_mailbox_domain(domain)
+            if not normalized_domain:
+                return None
+            query = query.filter(VerifiedLink.mailboxDomain == normalized_domain)
+        return query.first()
     finally:
         db.close()
 
 
-def list_active_by_mailbox_alias(alias: str):
+def list_active_by_mailbox_alias(alias: str, domain: str | None = None):
     normalized_alias = normalize_mailbox_alias(alias)
     if not normalized_alias:
         return []
     db = SessionLocal()
     try:
-        if db.query(VerifiedLink.reference).filter(VerifiedLink.reference == normalized_alias).first():
+        reference_query = db.query(VerifiedLink.reference).filter(VerifiedLink.reference == normalized_alias)
+        if domain is not None:
+            normalized_domain = normalize_mailbox_domain(domain)
+            if not normalized_domain:
+                return []
+            reference_query = reference_query.filter(VerifiedLink.mailboxDomain == normalized_domain)
+        else:
+            normalized_domain = None
+        if reference_query.first():
             logger.error("Alias namespace collides with VLink reference alias=%s", normalized_alias)
             return []
-        links = (
-            db.query(VerifiedLink)
-            .filter(
+        query = db.query(VerifiedLink).filter(
                 VerifiedLink.mailboxAlias == normalized_alias,
                 VerifiedLink.status.ilike(ACTIVE_STATUS),
             )
+        if domain is not None:
+            query = query.filter(VerifiedLink.mailboxDomain == normalized_domain)
+        links = (
+            query
             .order_by(VerifiedLink.reference.asc())
             .all()
         )
@@ -186,26 +231,28 @@ def list_active_by_mailbox_alias(alias: str):
         db.close()
 
 
-def list_active_for_account_mailbox(user_id: str, mailbox: str):
+def list_active_for_account_mailbox(user_id: str, mailbox: str, domain: str | None = None):
     normalized = normalize_mailbox(mailbox)
     if not normalized:
         return []
     db = SessionLocal()
     try:
-        direct = (
-            db.query(VerifiedLink)
-            .filter(
+        direct_query = db.query(VerifiedLink).filter(
                 VerifiedLink.userId == user_id,
                 VerifiedLink.reference == normalized,
                 VerifiedLink.status.ilike(ACTIVE_STATUS),
             )
-            .all()
-        )
+        normalized_domain = normalize_mailbox_domain(domain) if domain is not None else None
+        if domain is not None and not normalized_domain:
+            return []
+        if normalized_domain:
+            direct_query = direct_query.filter(VerifiedLink.mailboxDomain == normalized_domain)
+        direct = direct_query.all()
     finally:
         db.close()
     if direct:
         return direct
-    return [link for link in list_active_by_mailbox_alias(normalized) if link.userId == user_id]
+    return [link for link in list_active_by_mailbox_alias(normalized, normalized_domain) if link.userId == user_id]
 
 
 def list_for_account(user_id: str):

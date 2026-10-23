@@ -13,16 +13,19 @@ class TmaVMailControllerTests(unittest.TestCase):
                 name="Personal",
                 status="Active",
                 mailboxAlias="herve",
+                mailboxDomain="tcore.ca",
             )
         )
 
         self.assertEqual(payload["mailboxAlias"], "herve")
+        self.assertEqual(payload["mailboxDomain"], "tcore.ca")
 
     def test_serialize_vmail_message_matches_blazor_contract(self):
         message = SimpleNamespace(
             id=123,
             recipient_alias="vl10776",
             mailbox_type="vlink",
+            recipient_domain="tcore.ca",
             from_header="Compliance Desk <review@example-bank.com>",
             reply_to="review@example-bank.com",
             subject="Additional information requested",
@@ -44,6 +47,8 @@ class TmaVMailControllerTests(unittest.TestCase):
         self.assertEqual(payload["reference"], "vl10776")
         self.assertEqual(payload["mailbox"], "vl10776")
         self.assertEqual(payload["mailboxType"], "vlink")
+        self.assertEqual(payload["mailboxDomain"], "tcore.ca")
+        self.assertEqual(payload["mailboxAddress"], "vl10776@tcore.ca")
         self.assertEqual(payload["from"], "Compliance Desk <review@example-bank.com>")
         self.assertEqual(payload["replyTo"], "review@example-bank.com")
         self.assertEqual(payload["receivedAt"], "2026-08-14T03:20:00Z")

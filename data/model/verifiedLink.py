@@ -8,6 +8,8 @@ class VerifiedLink(Base):
     __tablename__ = "verified_links"
     __table_args__ = (
         Index("ix_verified_links_mailbox_alias_user_id", "mailboxAlias", "userId"),
+        Index("ix_verified_links_mailbox_alias_domain_user_id", "mailboxAlias", "mailboxDomain", "userId"),
+        Index("ix_verified_links_mailbox_domain_user_id", "mailboxDomain", "userId"),
     )
 
     reference = Column(String, primary_key=True, index=True)
@@ -22,4 +24,5 @@ class VerifiedLink(Base):
     name = Column(String, nullable=True)
     status = Column(String, nullable=True)
     mailboxAlias = Column(String(64), nullable=True, index=True)
+    mailboxDomain = Column(String(253), nullable=False, default="tonstealthid.com")
     updatedAt = Column(DateTime(timezone=True), nullable=False, index=True)

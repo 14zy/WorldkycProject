@@ -19,7 +19,7 @@ from api.worldKycApi import (
     extract_tokens,
     extract_user_id,
 )
-from config.config import WKYC_TELEGRAM_CONNECT_URL, WKYC_VLINK_BASE_URL
+from config.config import MAIL_FROM_DOMAIN, WKYC_TELEGRAM_CONNECT_URL, WKYC_VLINK_BASE_URL
 from services.sessionService import (
     AuthSessionExpiredError,
     SessionNotLinkedError,
@@ -143,6 +143,8 @@ def _serialize_vmail_message(message):
     return {
         "id": message.id,
         "mailbox": message.recipient_alias,
+        "mailboxDomain": getattr(message, "recipient_domain", None) or MAIL_FROM_DOMAIN,
+        "mailboxAddress": f"{message.recipient_alias}@{getattr(message, 'recipient_domain', None) or MAIL_FROM_DOMAIN}",
         "mailboxType": getattr(message, "mailbox_type", None) or "vlink",
         "reference": message.recipient_alias,
         "from": message.from_header,
@@ -219,6 +221,7 @@ def _serialize_stored_vlink(link):
         "name": link.name or "Unnamed",
         "status": link.status or "Unknown",
         "mailboxAlias": getattr(link, "mailboxAlias", None),
+        "mailboxDomain": getattr(link, "mailboxDomain", None) or MAIL_FROM_DOMAIN,
         "url": f"{WKYC_VLINK_BASE_URL}{link.reference}",
     }
 
