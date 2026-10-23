@@ -41,7 +41,8 @@ class VmailDerivationTests(unittest.TestCase):
         self.assertEqual(message.to_address, "recipient@example.com")
         self.assertEqual(message.subject, "Hello")
         self.assertEqual(message.text, "Body")
-        list_links.assert_called_once_with("user-1", "vl10776")
+        self.assertEqual(message.from_domain, "tonstealthid.com")
+        list_links.assert_called_once_with("user-1", "vl10776", "tonstealthid.com")
 
     @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
     def test_compose_accepts_alias_mailbox_and_legacy_matching_reference(self, list_links: Mock):
@@ -59,7 +60,38 @@ class VmailDerivationTests(unittest.TestCase):
         )
 
         self.assertEqual(message.reference, "herve")
-        list_links.assert_called_once_with("user-1", "herve")
+        list_links.assert_called_once_with("user-1", "herve", "tonstealthid.com")
+
+    @patch("services.vmailSendService.verifiedLinkRepository.list_active_for_account_mailbox")
+    def test_compose_uses_administrator_domain(self, list_links: Mock):
+        list_links.return_value = [SimpleNamespace(reference="vl1", status="Active")]
+
+        message = derive_compose(
+            "user-1",
+            {
+                "mailbox": "alice",
+                "fromDomain": "TCORE.CA",
+                "to": "recipient@example.com",
+                "subject": "Hello",
+                "text": "Body",
+            },
+        )
+
+        self.assertEqual(message.from_domain, "tcore.ca")
+        list_links.assert_called_once_with("user-1", "alice", "tcore.ca")
+
+    def test_compose_rejects_unmanaged_domain(self):
+        with self.assertRaisesRegex(VmailSendError, "not authorized"):
+            derive_compose(
+                "user-1",
+                {
+                    "mailbox": "alice",
+                    "fromDomain": "example.com",
+                    "to": "recipient@example.com",
+                    "subject": "Hello",
+                    "text": "Body",
+                },
+            )
 
     def test_compose_rejects_mismatched_mailbox_and_reference(self):
         with self.assertRaises(VmailSendError):
@@ -98,6 +130,7 @@ class VmailDerivationTests(unittest.TestCase):
         find_message.return_value = SimpleNamespace(
             id=42,
             recipient_alias="VL10776",
+            recipient_domain="tcore.ca",
             reply_to="Reply Desk <reply@example.com>",
             from_header="sender@example.net",
             subject="Original subject",
@@ -109,6 +142,7 @@ class VmailDerivationTests(unittest.TestCase):
         message = derive_reply("user-1", 42, {"text": " Answer "})
 
         self.assertEqual(message.to_address, "reply@example.com")
+        self.assertEqual(message.from_domain, "tcore.ca")
         self.assertEqual(message.subject, "Re: Original subject")
         self.assertEqual(message.in_reply_to, "<current@example.com>")
         self.assertEqual(
@@ -150,6 +184,21 @@ class VmailSubmissionTests(unittest.TestCase):
         values.update(overrides)
         return SimpleNamespace(**values)
 
+    def test_payload_hash_includes_sender_domain(self):
+        from services.vmailSendService import DerivedMessage, _payload_hash
+
+        common = dict(
+            reference="alice",
+            original_message_id=None,
+            to_address="recipient@example.com",
+            subject="Subject",
+            text="Body",
+        )
+        self.assertNotEqual(
+            _payload_hash("compose", DerivedMessage(**common, from_domain="tonstealthid.com")),
+            _payload_hash("compose", DerivedMessage(**common, from_domain="tcore.ca")),
+        )
+
     @patch("services.vmailSendService.outboundRepository.mark_queued")
     @patch("services.vmailSendService.send_vmail_email", return_value="resend-1")
     @patch("services.vmailSendService.outboundRepository.create_submission")
@@ -176,6 +225,7 @@ class VmailSubmissionTests(unittest.TestCase):
 
         self.assertIs(result, queued)
         send.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["from_address"], "vl1@tonstealthid.com")
         self.assertTrue(send.call_args.kwargs["idempotency_key"].endswith(":" + "a" * 32))
         mark_queued.assert_called_once_with("outbound-1", "resend-1")
 
@@ -198,6 +248,41 @@ class VmailSubmissionTests(unittest.TestCase):
 
         self.assertIs(result, record)
         send.assert_not_called()
+
+    @patch("services.vmailSendService.outboundRepository.mark_queued")
+    @patch("services.vmailSendService.send_vmail_email", return_value="resend-1")
+    @patch("services.vmailSendService.outboundRepository.create_submission")
+    @patch("services.vmailSendService.outboundRepository.count_recent", return_value=0)
+    @patch("services.vmailSendService.outboundRepository.find_by_request", return_value=None)
+    def test_submission_builds_from_address_from_derived_domain(
+        self, _find: Mock, _count: Mock, create: Mock, _send: Mock, mark_queued: Mock
+    ):
+        from services.vmailSendService import DerivedMessage, _payload_hash
+
+        derived = DerivedMessage(
+            "alice",
+            None,
+            "recipient@example.com",
+            "Subject",
+            "Body",
+            from_domain="tcore.ca",
+        )
+        record = self._record(
+            from_address="alice@tcore.ca",
+            payload_hash=_payload_hash("compose", derived),
+        )
+        create.return_value = (record, True)
+        mark_queued.return_value = self._record(status="queued", from_address="alice@tcore.ca")
+
+        submit(
+            user_id="user-1",
+            client_request_id="b" * 32,
+            kind="compose",
+            derived=derived,
+            correlation_id="correlation",
+        )
+
+        self.assertEqual(create.call_args.kwargs["from_address"], "alice@tcore.ca")
 
     @patch("services.vmailSendService.outboundRepository.find_by_request")
     def test_request_id_reuse_with_changed_content_conflicts(self, find: Mock):

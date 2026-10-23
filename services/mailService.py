@@ -5,6 +5,7 @@ import email
 import html
 import imaplib
 import logging
+from dataclasses import dataclass
 from email.header import decode_header
 from email.message import Message
 from email.utils import getaddresses, parsedate_to_datetime
@@ -41,6 +42,12 @@ STATUS_PRIORITY = {
     STATUS_TELEGRAM_ONLY: 1,
     STATUS_PARTIAL: 2,
 }
+
+
+@dataclass(frozen=True)
+class RecipientIdentity:
+    alias: str
+    domain: str
 
 
 def _imap_enabled() -> bool:
@@ -82,18 +89,23 @@ def _fetch_unseen_messages():
         client.logout()
 
 
-def _extract_aliases(message: Message) -> list[str]:
-    aliases: list[str] = []
+def _extract_recipients(message: Message) -> list[RecipientIdentity]:
+    recipients: list[RecipientIdentity] = []
     for header_name in RECIPIENT_HEADERS:
         for header_value in message.get_all(header_name, []):
             for _display_name, address in getaddresses([header_value]):
                 local_part, separator, domain = address.rpartition("@")
                 if not separator or domain.strip().casefold() not in MAIL_INBOUND_DOMAINS:
                     continue
-                normalized = local_part.strip().casefold()
-                if normalized and normalized not in aliases:
-                    aliases.append(normalized)
-    return aliases
+                normalized = RecipientIdentity(local_part.strip().casefold(), domain.strip().casefold())
+                if normalized.alias and normalized not in recipients:
+                    recipients.append(normalized)
+    return recipients
+
+
+def _extract_aliases(message: Message) -> list[str]:
+    """Compatibility helper for callers that only need local parts."""
+    return list(dict.fromkeys(recipient.alias for recipient in _extract_recipients(message)))
 
 
 def _select_effective_aliases(aliases: list[str]) -> list[str]:
@@ -103,6 +115,13 @@ def _select_effective_aliases(aliases: list[str]) -> list[str]:
     if SYSTEM_MAILBOX_ALIAS and SYSTEM_MAILBOX_ALIAS in aliases:
         return [SYSTEM_MAILBOX_ALIAS]
     return []
+
+
+def _select_effective_recipients(recipients: list[RecipientIdentity]) -> list[RecipientIdentity]:
+    target_recipients = [recipient for recipient in recipients if recipient.alias != SYSTEM_MAILBOX_ALIAS]
+    if target_recipients:
+        return target_recipients
+    return [recipient for recipient in recipients if recipient.alias == SYSTEM_MAILBOX_ALIAS]
 
 
 def _extract_body(message: Message) -> str:
@@ -214,12 +233,18 @@ async def _deliver_to_telegram(telegram_id: int, text: str):
         await bot.send_message(chat_id=telegram_id, text=chunk, parse_mode="HTML")
 
 
-def _deliver_to_user_email(message: Message, recipient_alias: str, recipient_email: str):
+def _deliver_to_user_email(
+    message: Message,
+    recipient_alias: str,
+    recipient_domain: str,
+    recipient_email: str,
+):
     subject = sanitize_mail_text(_decode_header_value(message.get("Subject"))) or "(no subject)"
     sender_header = sanitize_mail_text(_decode_header_value(message.get("From"))) or ""
     body = _build_plain_forward_content(message, recipient_alias)
     send_forward_email(
         recipient_alias=recipient_alias,
+        recipient_domain=recipient_domain,
         recipient_email=recipient_email,
         sender_header=sender_header,
         subject=subject,
@@ -260,39 +285,41 @@ async def _process_message(uid: str, message: Message):
         return
 
     message_id = message.get("Message-ID")
-    aliases = _extract_aliases(message)
-    effective_aliases = _select_effective_aliases(aliases)
-    if not effective_aliases:
+    recipients = _extract_recipients(message)
+    effective_recipients = _select_effective_recipients(recipients)
+    if not effective_recipients:
         logger.warning("Skipping IMAP message uid=%s message_id=%s without recipient alias", uid, message_id)
         return
 
     resolved_any = False
-    resolved_deliveries: list[tuple[str, str, object]] = []
-    target_deliveries: dict[str, tuple[str, str, object]] = {}
-    unmatched_aliases: list[str] = []
+    resolved_deliveries: list[tuple[RecipientIdentity, str, object]] = []
+    target_deliveries: dict[str, tuple[RecipientIdentity, str, object]] = {}
+    unmatched_recipients: list[RecipientIdentity] = []
     aggregate_status: str | None = None
     aggregate_alias: str | None = None
     aggregate_errors: list[str] = []
-    for alias in effective_aliases:
-        verified_link = verifiedLinkRepository.find_by_reference(alias)
+    for recipient in effective_recipients:
+        alias = recipient.alias
+        verified_link = verifiedLinkRepository.find_by_reference(alias, recipient.domain)
         mailbox_type = "vlink"
         if not verified_link or not _is_direct_link_routable(verified_link):
-            alias_links = verifiedLinkRepository.list_active_by_mailbox_alias(alias)
+            alias_links = verifiedLinkRepository.list_active_by_mailbox_alias(alias, recipient.domain)
             if alias_links:
                 verified_link = alias_links[0]
                 mailbox_type = "alias"
             else:
                 verified_link = None
         if verified_link is None:
-            unmatched_aliases.append(alias)
+            unmatched_recipients.append(recipient)
             continue
-        resolved_deliveries.append((alias, mailbox_type, verified_link))
+        resolved_deliveries.append((recipient, mailbox_type, verified_link))
         owner_user_id = getattr(verified_link, "userId", None)
         owner_key = f"user:{owner_user_id}" if owner_user_id else f"telegram:{verified_link.telegramId}"
-        target_deliveries.setdefault(owner_key, (alias, mailbox_type, verified_link))
+        target_deliveries.setdefault(owner_key, (recipient, mailbox_type, verified_link))
 
     delivery_results: dict[str, tuple[str, str | None, int | None]] = {}
-    for owner_key, (alias, _mailbox_type, verified_link) in target_deliveries.items():
+    for owner_key, (recipient, _mailbox_type, verified_link) in target_deliveries.items():
+        alias = recipient.alias
         owner_user_id = getattr(verified_link, "userId", None)
         account = worldKycAccountRepository.find_by_user_id(owner_user_id) if owner_user_id else None
         active_telegram_links = (
@@ -326,7 +353,7 @@ async def _process_message(uid: str, message: Message):
         )
         if email_address and not _is_managed_forwarding_address(email_address):
             try:
-                _deliver_to_user_email(message, alias, email_address)
+                _deliver_to_user_email(message, alias, recipient.domain, email_address)
                 status = STATUS_DELIVERED
             except Exception as exc:
                 status = STATUS_PARTIAL
@@ -360,7 +387,8 @@ async def _process_message(uid: str, message: Message):
 
     if resolved_any:
         inbox_content = _extract_inbox_content(message)
-        for alias, mailbox_type, verified_link in resolved_deliveries:
+        for recipient, mailbox_type, verified_link in resolved_deliveries:
+            alias = recipient.alias
             owner_user_id = getattr(verified_link, "userId", None)
             owner_key = f"user:{owner_user_id}" if owner_user_id else f"telegram:{verified_link.telegramId}"
             status, error, delivery_telegram_id = delivery_results.get(
@@ -373,6 +401,7 @@ async def _process_message(uid: str, message: Message):
                 message_id=message_id,
                 references=inbox_content["references"],
                 recipient_alias=alias,
+                recipient_domain=recipient.domain,
                 mailbox_type=mailbox_type,
                 telegram_id=delivery_telegram_id,
                 user_id=owner_user_id,
@@ -395,17 +424,23 @@ async def _process_message(uid: str, message: Message):
             error="; ".join(aggregate_errors) if aggregate_errors else None,
         )
 
-    if unmatched_aliases and resolved_any:
+    if unmatched_recipients and resolved_any:
         logger.info(
             "IMAP message uid=%s message_id=%s delivered with unmatched aliases=%s",
             uid,
             message_id,
-            ",".join(unmatched_aliases),
+            ",".join(f"{recipient.alias}@{recipient.domain}" for recipient in unmatched_recipients),
         )
 
     if not resolved_any:
-        for alias in unmatched_aliases:
-            logger.warning("No local verified link match for uid=%s message_id=%s alias=%s", uid, message_id, alias)
+        for recipient in unmatched_recipients:
+            logger.warning(
+                "No local verified link match for uid=%s message_id=%s address=%s@%s",
+                uid,
+                message_id,
+                recipient.alias,
+                recipient.domain,
+            )
         logger.warning("IMAP message uid=%s message_id=%s had no deliverable recipients", uid, message_id)
 
 

@@ -12,6 +12,18 @@ from services.outboundMailService import (
 
 
 class OutboundMailServiceTests(unittest.TestCase):
+    def test_build_forward_email_uses_recipient_domain(self):
+        message = build_forward_email(
+            recipient_alias="alice",
+            recipient_domain="tcore.ca",
+            recipient_email="owner@example.com",
+            sender_header="sender@example.net",
+            subject="Subject",
+            body="Body",
+        )
+
+        self.assertEqual(message["From"], "ALICE@tcore.ca")
+
     def test_build_forward_email_sets_alias_headers_and_plain_text_body(self):
         message = build_forward_email(
             recipient_alias="VL1232",

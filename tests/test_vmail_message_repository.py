@@ -57,6 +57,33 @@ class VMailMessageRepositoryTests(unittest.TestCase):
         self.assertEqual(messages[0].delivery_status, "partial")
         self.assertEqual(messages[0].error, "smtp down")
 
+    def test_same_local_part_on_two_domains_is_stored_separately(self):
+        common = dict(
+            mailbox="INBOX",
+            imap_uid="same-uid",
+            message_id="<same@example.com>",
+            recipient_alias="alice",
+            telegram_id=None,
+            user_id="user-1",
+            from_header="sender@example.com",
+            reply_to=None,
+            subject="Subject",
+            body_text="Body",
+            delivery_status="delivered",
+        )
+        first = vmailMessageRepository.upsert_from_processed_message(
+            **common, recipient_domain="tonstealthid.com"
+        )
+        second = vmailMessageRepository.upsert_from_processed_message(
+            **common, recipient_domain="tcore.ca"
+        )
+
+        self.assertNotEqual(first.id, second.id)
+        self.assertEqual(
+            {message.recipient_domain for message in vmailMessageRepository.list_for_user("user-1")},
+            {"tonstealthid.com", "tcore.ca"},
+        )
+
     def test_list_filters_unread_and_sorts_newest_first(self):
         older = datetime.now(timezone.utc) - timedelta(hours=2)
         newer = datetime.now(timezone.utc) - timedelta(minutes=5)

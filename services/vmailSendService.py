@@ -11,6 +11,7 @@ import data.repository.outboundVmailMessageRepository as outboundRepository
 import data.repository.verifiedLinkRepository as verifiedLinkRepository
 from config.config import (
     MAIL_FROM_DOMAIN,
+    MAIL_OUTBOUND_DOMAINS,
     VMAIL_ACCOUNT_SEND_LIMIT_PER_HOUR,
     VMAIL_LINK_SEND_LIMIT_PER_HOUR,
 )
@@ -54,6 +55,7 @@ class DerivedMessage:
     to_address: str
     subject: str
     text: str
+    from_domain: str = MAIL_FROM_DOMAIN
     in_reply_to: str | None = None
     references: str | None = None
 
@@ -99,8 +101,17 @@ def _parse_mailbox(value: str, *, allow_display_name: bool) -> str:
     return address.addr_spec
 
 
-def _active_owned_mailbox(user_id: str, mailbox: str):
-    links = verifiedLinkRepository.list_active_for_account_mailbox(user_id, mailbox)
+def _normalize_outbound_domain(value) -> str:
+    if not isinstance(value, str):
+        raise VmailSendError("fromDomain is required")
+    normalized = value.strip().casefold().removeprefix("@").rstrip(".")
+    if normalized not in MAIL_OUTBOUND_DOMAINS:
+        raise VmailSendError("fromDomain is not authorized")
+    return normalized
+
+
+def _active_owned_mailbox(user_id: str, mailbox: str, domain: str):
+    links = verifiedLinkRepository.list_active_for_account_mailbox(user_id, mailbox, domain)
     if not links:
         raise VmailNotFoundError("VMail resource not found")
     return links
@@ -127,7 +138,8 @@ def derive_compose(user_id: str, payload: dict) -> DerivedMessage:
     reference = _compose_mailbox(payload)
     if not reference or not REFERENCE_RE.fullmatch(reference):
         raise VmailSendError("mailbox is invalid")
-    _active_owned_mailbox(user_id, reference)
+    from_domain = _normalize_outbound_domain(payload.get("fromDomain", MAIL_FROM_DOMAIN))
+    _active_owned_mailbox(user_id, reference, from_domain)
     try:
         to_address = _parse_mailbox(_required_string(payload, "to"), allow_display_name=False)
     except ValueError as exc:
@@ -140,6 +152,7 @@ def derive_compose(user_id: str, payload: dict) -> DerivedMessage:
         raise VmailSendError("subject is required and must not exceed 200 characters")
     return DerivedMessage(
         reference=reference,
+        from_domain=from_domain,
         original_message_id=None,
         to_address=to_address,
         subject=subject,
@@ -154,7 +167,8 @@ def derive_reply(user_id: str, message_id: int, payload: dict) -> DerivedMessage
     reference = (original.recipient_alias or "").strip().casefold()
     if not REFERENCE_RE.fullmatch(reference):
         raise VmailNotFoundError("VMail resource not found")
-    _active_owned_mailbox(user_id, reference)
+    from_domain = _normalize_outbound_domain(getattr(original, "recipient_domain", None) or MAIL_FROM_DOMAIN)
+    _active_owned_mailbox(user_id, reference, from_domain)
     to_address = None
     for destination in (original.reply_to, original.from_header):
         if not destination:
@@ -180,6 +194,7 @@ def derive_reply(user_id: str, message_id: int, payload: dict) -> DerivedMessage
         references.append(rfc_message_id)
     return DerivedMessage(
         reference=reference,
+        from_domain=from_domain,
         original_message_id=original.id,
         to_address=to_address,
         subject=subject,
@@ -225,7 +240,7 @@ def submit(*, user_id: str, client_request_id: str, kind: str, derived: DerivedM
             raise VmailSubmissionInProgressError("VMail submission is already in progress")
     else:
         _check_rate_limit(user_id, derived.reference)
-        from_address = f"{derived.reference}@{MAIL_FROM_DOMAIN}"
+        from_address = f"{derived.reference}@{derived.from_domain}"
         record, created = outboundRepository.create_submission(
             userId=user_id,
             reference=derived.reference,

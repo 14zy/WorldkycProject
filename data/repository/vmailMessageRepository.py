@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from config.dbConfig import SessionLocal
+from config.config import MAIL_FROM_DOMAIN
 from data.model.vmailMessage import VMailMessage
 
 
@@ -34,6 +35,7 @@ def upsert_from_processed_message(
     message_id: str | None,
     references: str | None = None,
     recipient_alias: str,
+    recipient_domain: str = MAIL_FROM_DOMAIN,
     mailbox_type: str = "vlink",
     telegram_id: int | None,
     user_id: str | None,
@@ -48,6 +50,9 @@ def upsert_from_processed_message(
     normalized_alias = (recipient_alias or "").strip().casefold()
     if not normalized_alias:
         raise ValueError("recipient_alias is required")
+    normalized_domain = (recipient_domain or "").strip().casefold()
+    if not normalized_domain:
+        raise ValueError("recipient_domain is required")
     normalized_mailbox_type = (mailbox_type or "").strip().casefold()
     if normalized_mailbox_type not in {"alias", "vlink"}:
         raise ValueError("mailbox_type must be alias or vlink")
@@ -60,15 +65,22 @@ def upsert_from_processed_message(
                 VMailMessage.mailbox == mailbox,
                 VMailMessage.imap_uid == imap_uid,
                 VMailMessage.recipient_alias == normalized_alias,
+                VMailMessage.recipient_domain == normalized_domain,
             )
             .first()
         )
         if not message:
-            message = VMailMessage(mailbox=mailbox, imap_uid=imap_uid, recipient_alias=normalized_alias)
+            message = VMailMessage(
+                mailbox=mailbox,
+                imap_uid=imap_uid,
+                recipient_alias=normalized_alias,
+                recipient_domain=normalized_domain,
+            )
             db.add(message)
 
         message.message_id = message_id
         message.references = references
+        message.recipient_domain = normalized_domain
         message.mailbox_type = normalized_mailbox_type
         message.telegramId = telegram_id
         message.userId = user_id

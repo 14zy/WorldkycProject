@@ -79,11 +79,18 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RESEND_BASE_URL = os.getenv("RESEND_BASE_URL", "https://api.resend.com").rstrip("/")
 RESEND_TIMEOUT_SECONDS = _get_int_env("RESEND_TIMEOUT_SECONDS", 15)
 RESEND_WEBHOOK_SECRET = os.getenv("RESEND_WEBHOOK_SECRET")
-MAIL_FROM_DOMAIN = os.getenv("MAIL_FROM_DOMAIN", "tonstealthid.com").strip()
+MAIL_FROM_DOMAIN = os.getenv("MAIL_FROM_DOMAIN", "tonstealthid.com").strip().casefold()
 MAIL_INBOUND_DOMAINS = tuple(
     dict.fromkeys(
         domain.strip().casefold()
         for domain in os.getenv("MAIL_INBOUND_DOMAINS", MAIL_FROM_DOMAIN).split(",")
+        if domain.strip()
+    )
+)
+MAIL_OUTBOUND_DOMAINS = tuple(
+    dict.fromkeys(
+        domain.strip().casefold()
+        for domain in os.getenv("MAIL_OUTBOUND_DOMAINS", MAIL_FROM_DOMAIN).split(",")
         if domain.strip()
     )
 )

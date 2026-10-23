@@ -6,7 +6,13 @@ from config.dbConfig import Base
 class VMailMessage(Base):
     __tablename__ = "vmail_messages"
     __table_args__ = (
-        UniqueConstraint("mailbox", "imap_uid", "recipient_alias", name="uq_vmail_messages_mailbox_uid_alias"),
+        UniqueConstraint(
+            "mailbox",
+            "imap_uid",
+            "recipient_alias",
+            "recipient_domain",
+            name="uq_vmail_messages_mailbox_uid_alias_domain",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -15,6 +21,7 @@ class VMailMessage(Base):
     message_id = Column(String, nullable=True, index=True)
     references = Column(Text, nullable=True)
     recipient_alias = Column(String, nullable=False, index=True)
+    recipient_domain = Column(String(253), nullable=False, default="tonstealthid.com", index=True)
     mailbox_type = Column(String(16), nullable=False, server_default=text("'vlink'"), default="vlink")
     telegramId = Column(BigInteger, nullable=True, index=True)
     userId = Column(String, nullable=True, index=True)
